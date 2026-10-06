@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 180 250" role="img" aria-label="새싹 옹기"><path d="M89 108 Q87 72 91 47" fill="none" stroke="#718b52" stroke-width="7" stroke-linecap="round"/>
+      <path d="M89 76 C46 87 24 55 28 33 C54 28 84 39 89 76" fill="#a6bb78"/>
+      <path d="M91 61 C95 26 122 12 149 19 C153 42 131 72 91 61" fill="#7f9c5e"/>
+      <path d="M88 70 Q54 52 36 41 M95 57 Q118 35 138 27" fill="none" stroke="#d0dcb0" stroke-width="3" stroke-linecap="round"/>
+      <path d="M43 105 Q88 91 137 105 L126 197 Q88 218 53 197 Z" fill="#cba87c"/>
+      <path d="M51 110 L60 191 Q88 205 117 191 L126 110" fill="#e7c89e"/>
+      <rect x="36" y="99" width="108" height="23" rx="11" fill="#ecd2ac"/><path d="M46 106 L133 106" stroke="#f9e7cd" stroke-width="3" stroke-linecap="round"/>
+      <ellipse cx="72" cy="151" rx="5" ry="9" fill="#655546"/><ellipse cx="109" cy="151" rx="5" ry="9" fill="#655546"/>
+      <ellipse cx="60" cy="163" rx="8" ry="4" fill="#dda696"/><ellipse cx="120" cy="163" rx="8" ry="4" fill="#dda696"/>
+      <path d="M83 170 Q90 178 97 170" fill="none" stroke="#806450" stroke-width="3" stroke-linecap="round"/>
+      <path d="M157 76 L157 92 M157 101 L157 102" stroke="#8eab67" stroke-width="5" stroke-linecap="round"/></svg>

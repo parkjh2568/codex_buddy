@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; base-uri 'none'; form-action 'none'; object-src 'none'">
+  <title>옹기봇</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main id="pet-surface" hidden>
+    <button id="pet-bubble" class="pet-bubble" aria-label="옹기봇과 대화">말 걸어주세요 <span>↗</span></button>
+    <button id="pet-character" class="pet-character motion-sway" aria-label="옹기봇: 클릭하면 대화, 드래그하면 이동">
+      <img id="pet-image" alt="옹기봇 캐릭터" draggable="false">
+    </button>
+    <div class="pet-ground"></div>
+    <div class="pet-controls">
+      <button id="pet-chat" aria-label="대화 열기">대화</button>
+      <button id="pet-sleep" aria-label="쉬기 또는 깨우기">☾</button>
+      <button id="pet-settings" aria-label="설정 열기">⚙</button>
+    </div>
+  </main>
+  <main id="panel-surface" hidden>
+    <div class="panel-shell">
+      <header class="header">
+        <div class="brand-mark">o<span>o</span></div>
+        <div class="brand"><h1>옹기봇 <span>ALPHA</span></h1><p>당신 곁의 작은 친구</p></div>
+        <button id="open-settings" class="settings-button" data-tab="settings" aria-label="설정" title="설정">⚙︎</button>
+        <button id="close-panel" class="icon-button" aria-label="말풍선 닫기">×</button>
+      </header>
+      <nav class="tabs" aria-label="화면 선택">
+        <button data-tab="chat" class="active">대화</button>
+        <button data-tab="history">이전 대화</button>
+      </nav>
+      <section id="chat-tab" class="tab-content">
+        <div class="connection-bar"><span id="connection-label"><i></i>연결 준비</span><button id="new-chat">새 대화 ↗</button></div>
+        <p id="history-warning" class="history-warning" hidden></p>
+        <div id="messages" class="messages" aria-label="대화 기록" tabindex="0">
+          <button id="load-older" class="load-older" hidden>이전 내용 더 보기</button>
+          <div id="welcome" class="welcome">
+            <div class="welcome-art"><img id="welcome-image" alt="반기는 옹기봇"><span class="spark spark-one">✦</span><span class="spark spark-two">✧</span></div>
+            <span class="eyebrow">A LITTLE FRIEND, RIGHT HERE.</span>
+            <h2>무슨 생각 하고 있어요?</h2>
+            <p>작은 질문도, 떠오른 아이디어도.<br>여기서 편하게 이야기해요.</p>
+            <button class="suggestion" data-prompt="안녕! 어떤 일을 도와줄 수 있어?">어떤 일을 도와줄 수 있어? <span>↗</span></button>
+            <button class="suggestion" data-prompt="오늘 해야 할 일을 정리하는 걸 도와줘.">오늘 할 일, 같이 정리해볼까? <span>↗</span></button>
+          </div>
+        </div>
+        <div id="requests" class="requests" hidden></div>
+        <div id="queue-bar" class="queue-bar" hidden></div>
+        <form id="composer" class="composer">
+          <textarea id="prompt" rows="2" maxlength="8000" placeholder="옹기봇에게 말 걸기…" aria-label="질문 입력"></textarea>
+          <div class="composer-bottom"><span id="composer-hint">Enter 보내기 · Shift+Enter 줄바꿈</span><button id="stop" type="button" hidden>중단</button><button id="send" type="submit" aria-label="질문 보내기">↑</button></div>
+        </form>
+        <div class="model-bar" aria-label="다음 질문의 모델과 속도">
+          <div class="model-controls">
+            <select id="model-select" aria-label="대화 모델"><option value="">CLI 기본값</option></select>
+            <select id="effort-select" aria-label="추론 단계"><option value="">기본 추론</option></select>
+            <select id="speed-select" aria-label="응답 속도"><option value="default">Standard</option></select>
+            <button id="refresh-models" type="button" aria-label="모델 목록 새로고침" title="모델 목록 새로고침">↻</button>
+          </div>
+          <p id="model-info" class="model-info" role="status" hidden>모델 설정을 확인할 수 있어요</p>
+        </div>
+      </section>
+      <section id="history-tab" class="tab-content history" hidden>
+        <div class="section-heading"><h2>우리의 지난 이야기</h2><p>옹기봇에서 나눈 대화만 모았어요.</p></div>
+        <div class="history-actions"><input id="history-search" type="search" placeholder="제목이나 최근 내용으로 찾기" aria-label="이전 대화 검색"><button id="history-new">＋ 새 대화</button></div>
+        <p id="history-busy" class="settings-note" hidden>진행 중인 질문을 마치거나 취소하면 다른 대화를 열 수 있어요.</p>
+        <div id="conversation-list" class="conversation-list" aria-label="옹기봇 이전 대화 목록"></div>
+        <div id="history-empty" class="history-empty"><span>☁</span><h3>아직 지난 이야기가 없어요</h3><p>질문을 보내면 이곳에 차곡차곡 남아요.</p></div>
+      </section>
+      <section id="settings-tab" class="tab-content settings" hidden>
+        <div class="section-heading"><div><h2>오늘의 작은 친구</h2><p>대화는 그대로, 친구의 모습만 바뀌어요.</p></div></div>
+        <div id="character-cards" class="character-cards"></div>
+        <button id="import-pack" class="wide-button">＋ 캐릭터 팩 가져오기</button>
+        <div class="settings-group">
+          <h3>함께 지내는 방법</h3>
+          <label class="switch-row"><span>움직임 줄이기<small>조용히 곁에 머물러요</small></span><input id="reduced-motion" type="checkbox" role="switch"></label>
+          <label class="switch-row"><span>항상 위에 표시<small>다른 창 위에서도 만나요</small></span><input id="always-on-top" type="checkbox" role="switch"></label>
+          <label class="switch-row"><span>수신 대답속도 측정<small>새 질문의 단계별 소요시간을 답변 끝에 표시해요</small></span><input id="measure-response-time" type="checkbox" role="switch"></label>
+        </div>
+        <div class="settings-group">
+          <h3>대화 연결</h3>
+          <label class="switch-row"><span>체험 모드<small>실제 Codex 호출 없이 둘러보기</small></span><input id="demo-mode" type="checkbox" role="switch"></label>
+          <button id="pick-workspace" class="path-button"><span>작업 폴더</span><strong id="workspace-path"></strong><b>↗</b></button>
+          <button id="pick-codex" class="path-button"><span>Codex CLI</span><strong id="codex-path"></strong><b>↗</b></button>
+          <p class="settings-note">알파는 읽기 전용으로 시작해요. 읽기 범위는 CLI 권한 설정을 따르며 작업 폴더만으로 제한되지 않아요. 연결 설정을 바꾸면 새 대화를 시작해요.</p>
+        </div>
+        <div class="future-card"><span>COMING NEXT</span><h3>필요한 소식을 먼저 전해요</h3><p>Slack 호출과 관심 키워드 알림은<br>다음 단계에서 만나요.</p></div>
+        <div id="pack-errors" class="settings-note" hidden></div>
+        <button id="open-data" class="text-button">내 기록 · 캐릭터 폴더 열기 ↗</button>
+        <p class="version">옹기봇 0.1.0-alpha.8 · ⌘/Ctrl + Shift + Space</p>
+      </section>
+      <dialog id="delete-dialog" aria-labelledby="delete-heading" aria-describedby="delete-description">
+        <h2 id="delete-heading">대화를 삭제할까요?</h2><p id="delete-title"></p><p id="delete-description"></p><p id="delete-error" hidden></p>
+        <div class="delete-actions"><button id="delete-cancel" type="button">취소</button><button id="delete-confirm" type="button">영구 삭제</button></div>
+      </dialog>
+      <div id="toast" class="toast" role="status" hidden></div>
+    </div>
+  </main>
+  <script src="renderer.bundle.js"></script>
+</body>
+</html>

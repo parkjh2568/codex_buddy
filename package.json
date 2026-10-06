@@ -1,0 +1,40 @@
+{
+  "name": "onggi-bot",
+  "productName": "OnggiBot",
+  "version": "0.1.0-alpha.9",
+  "description": "A modular desktop companion connected to your local Codex CLI",
+  "private": true,
+  "main": "src/main.cjs",
+  "scripts": {
+    "build": "node scripts/build.cjs",
+    "start": "npm run build && electron .",
+    "demo": "npm run build && electron . --demo",
+    "test": "node --test test/*.test.cjs",
+    "check": "node scripts/check.cjs",
+    "smoke": "npm run build && electron . --smoke",
+    "smoke:real": "npm run build && electron . --real-smoke",
+    "smoke:models": "npm run build && electron . --model-smoke",
+    "characters:generate": "node scripts/create-characters.cjs",
+    "icons:generate": "electron scripts/create-icons.cjs",
+    "icons:icns": "node scripts/icns.cjs",
+    "codex:smoke": "node scripts/codex-smoke.cjs",
+    "package": "npm run build && node scripts/package.cjs",
+    "smoke:history": "npm run build && electron . --history-smoke",
+    "smoke:pointer": "npm run build && electron . --pet-pointer-smoke",
+    "smoke:floating": "npm run build && electron . --floating-smoke",
+    "smoke:timing": "npm run build && electron . --timing-smoke",
+    "smoke:performance": "npm run build && electron . --performance-smoke",
+    "smoke:delete": "npm run build && electron . --delete-smoke",
+    "codex:delete-smoke": "node scripts/codex-delete-smoke.cjs"
+  },
+  "devDependencies": {
+    "@electron/packager": "20.3.0",
+    "electron": "44.5.1",
+    "esbuild": "0.28.2"
+  },
+  "dependencies": {
+    "dompurify": "3.4.16",
+    "markdown-it": "15.0.2",
+    "markdown-it-cjk-friendly": "3.0.0"
+  }
+}
