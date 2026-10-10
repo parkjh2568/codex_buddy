@@ -1,0 +1,85 @@
+{
+  "schemaVersion": 2,
+  "id": "onggi-pixel-bean",
+  "name": "픽셀 콩",
+  "description": "작은 표정으로 곁을 지키는 픽셀 친구",
+  "version": "1.0.0",
+  "author": "OnggiBot",
+  "source": "Original procedural SVG: scripts/create-characters.cjs",
+  "license": "Project character assets",
+  "size": {
+    "width": 128,
+    "height": 160
+  },
+  "bubbleAnchor": {
+    "x": 0.7,
+    "y": 0.12
+  },
+  "motion": "float",
+  "states": {
+    "idle": "idle.svg",
+    "listening": "listening.svg",
+    "thinking": "thinking.svg",
+    "replying": "replying.svg",
+    "attention": "attention.svg",
+    "error": "error.svg",
+    "sleeping": "sleeping.svg"
+  },
+  "personas": {
+    "base": "personas/base.md",
+    "modes": [
+      {
+        "id": "friendly",
+        "name": "친절한 모드",
+        "description": "짧고 친절하게, 필요한 다음 행동까지",
+        "file": "personas/friendly.md"
+      },
+      {
+        "id": "warm-long",
+        "name": "상냥한 장문 모드",
+        "description": "차근차근 자세히 설명하는 말투",
+        "file": "personas/warm-long.md"
+      },
+      {
+        "id": "concise",
+        "name": "핵심 단답 모드",
+        "description": "이모지 없이 핵심만 짧게",
+        "file": "personas/concise.md"
+      },
+      {
+        "id": "blunt",
+        "name": "퉁퉁이 모드",
+        "description": "툴툴대는 반말, 내용은 정확하게",
+        "file": "personas/blunt.md"
+      }
+    ]
+  },
+  "animation": {
+    "canvas": {
+      "width": 128,
+      "height": 160
+    },
+    "pivot": {
+      "x": 0.5,
+      "y": 1
+    },
+    "rendering": "pixel",
+    "blink": {
+      "loop": true,
+      "frames": [
+        {
+          "file": "idle.svg",
+          "durationMs": 4200
+        },
+        {
+          "file": "blink.svg",
+          "durationMs": 120
+        },
+        {
+          "file": "idle.svg",
+          "durationMs": 120
+        }
+      ]
+    }
+  }
+}

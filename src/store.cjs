@@ -40,13 +40,16 @@ class Store {
           if ((['model','effort'].includes(key) && value === null) || (typeof value === 'string' && value.length > 0 && value.length <= (['workspace','codexPath'].includes(key) ? 8192 : 200) && !value.includes('\u0000'))) settings[key] = value;
           else repaired = true;
         }
-        for (const key of ['demo','reducedMotion','alwaysOnTop','measureResponseTime','batterySaver']) {
+        for (const key of ['demo','reducedMotion','alwaysOnTop','measureResponseTime','batterySaver','notifyCompleted','notifyApproval','notifyFailed','notifyPreview','notifySound','quietHoursEnabled']) {
           if (!(key in saved.settings)) continue;
           if (typeof saved.settings[key] === 'boolean') settings[key] = saved.settings[key];
           else repaired = true;
         }
         if(saved.settings.appearanceProfile!==undefined){if(['custom','quiet','daily','lively'].includes(saved.settings.appearanceProfile))settings.appearanceProfile=saved.settings.appearanceProfile;else repaired=true;}
         if(saved.settings.characterScale!==undefined){if([.35,.5,.65].includes(saved.settings.characterScale))settings.characterScale=saved.settings.characterScale;else repaired=true;}
+        if(saved.settings.approvalDisplay!==undefined){if(['panel','notification'].includes(saved.settings.approvalDisplay))settings.approvalDisplay=saved.settings.approvalDisplay;else repaired=true;}
+        for(const [key,values]of [['fontScale',[100,110,120]],['miniSize',['small','comfortable']],['sendKey',['enter','modifier-enter']],['hotkey',['CommandOrControl+Shift+Space','CommandOrControl+Shift+B','CommandOrControl+Shift+O']]])if(saved.settings[key]!==undefined){if(values.includes(saved.settings[key]))settings[key]=saved.settings[key];else repaired=true;}
+        for(const key of ['quietStart','quietEnd'])if(saved.settings[key]!==undefined){if(Number.isInteger(saved.settings[key])&&saved.settings[key]>=0&&saved.settings[key]<1440)settings[key]=saved.settings[key];else repaired=true;}
         const position = saved.settings.position;
         if (position == null) settings.position = null;
         else if (typeof position === 'object' && ['x','y'].every(key => Number.isFinite(position[key]) && Math.abs(position[key]) < 100000) && ['width','height'].every(key => position[key] === undefined || (Number.isFinite(position[key]) && position[key] > 0 && position[key] < 10000))) settings.position = { x:position.x, y:position.y, ...(position.width === undefined ? {} : {width:position.width}), ...(position.height === undefined ? {} : {height:position.height}) };
@@ -71,7 +74,7 @@ class Store {
             ids.add(c.id); return true;
           }).map(c => {
             const createdAt = Number.isFinite(c.createdAt) && c.createdAt >= 0 && c.createdAt <= 8640000000000000 ? c.createdAt : Date.now();
-            return { ...c, title:c.title.slice(0,60), preview:typeof c.preview === 'string' ? c.preview.slice(0,120) : '', createdAt, updatedAt:Number.isFinite(c.updatedAt) && c.updatedAt >= 0 && c.updatedAt <= 8640000000000000 ? c.updatedAt : createdAt,
+            return { ...c, title:c.title.slice(0,60), titleSource:c.titleSource==='manual'?'manual':'auto',pinned:c.pinned===true,preview:typeof c.preview === 'string' ? c.preview.slice(0,120) : '', createdAt, updatedAt:Number.isFinite(c.updatedAt) && c.updatedAt >= 0 && c.updatedAt <= 8640000000000000 ? c.updatedAt : createdAt,
               workspace:typeof c.workspace === 'string' && !c.workspace.includes('\u0000') ? c.workspace : undefined, codexPath:typeof c.codexPath === 'string' && !c.codexPath.includes('\u0000') ? c.codexPath : undefined,
               threadId:typeof c.threadId === 'string' ? c.threadId : null, mode:c.mode === 'demo' ? 'demo' : 'codex', messageCount:Number.isSafeInteger(c.messageCount) && c.messageCount >= 0 ? c.messageCount : 0 };
           });
@@ -116,6 +119,16 @@ class Store {
         for (const key of ['receivedAt','submittedAt','enqueuedAt','queueStartedAt','cliSentAt','firstReplyAt','completedAt','renderedAt','inputMs','dispatchMs','cliMs','firstReplyMs','queueMs','renderMs','totalMs']) if (m.timing[key] === null || (Number.isFinite(m.timing[key]) && m.timing[key] >= 0)) message.timing[key] = m.timing[key];
         message.timing.mode = m.mode; message.timing.status = message.status;
       } else delete message.timing;
+      if(!['conversation','summary','analyze','plan','review'].includes(m.purpose))delete message.purpose;
+      if(m.skill&&typeof m.skill.name==='string'&&m.skill.name.length<=200&&typeof m.skill.path==='string'&&path.isAbsolute(m.skill.path)&&m.skill.path.length<=8192&&!m.skill.path.includes('\u0000')&&/^[a-f0-9]{64}$/.test(m.skill.hash))message.skill={name:m.skill.name,path:m.skill.path,hash:m.skill.hash};else delete message.skill;
+      if(m.progress&&typeof m.progress==='object')message.progress={plan:Array.isArray(m.progress.plan)?m.progress.plan.slice(0,24).filter(item=>item&&typeof item.step==='string'&&['pending','inProgress','completed'].includes(item.status)).map(item=>({step:item.step.slice(0,300),status:item.status})):[],tools:Array.isArray(m.progress.tools)?m.progress.tools.slice(-24).filter(item=>item&&typeof item.id==='string'&&typeof item.label==='string'&&['commandExecution','fileChange','mcpToolCall','webSearch'].includes(item.type)&&['running','failed','completed','stopped','declined'].includes(item.status)).map(item=>({id:item.id.slice(0,256),label:item.label.slice(0,180),type:item.type,status:item.status})):[]};else delete message.progress;
+      if(m.tokenUsage&&typeof m.tokenUsage==='object'){
+        message.tokenUsage={};for(const slot of ['total','last']){const value=m.tokenUsage[slot];if(value&&['totalTokens','inputTokens','outputTokens'].every(key=>Number.isSafeInteger(value[key])&&value[key]>=0))message.tokenUsage[slot]={totalTokens:value.totalTokens,inputTokens:value.inputTokens,outputTokens:value.outputTokens};}
+        if(Number.isSafeInteger(m.tokenUsage.modelContextWindow)&&m.tokenUsage.modelContextWindow>0)message.tokenUsage.modelContextWindow=m.tokenUsage.modelContextWindow;
+      }else delete message.tokenUsage;
+      if(!['running','completed'].includes(m.reviewState))delete message.reviewState;
+      if(typeof m.reviewSettings==='string')message.reviewSettings=m.reviewSettings.slice(0,300);else delete message.reviewSettings;
+      if(typeof m.reviewThreadModel==='string')message.reviewThreadModel=m.reviewThreadModel.slice(0,200);else delete message.reviewThreadModel;
       return message;
     });
     return saved;
@@ -228,7 +241,7 @@ class Store {
           historyFile=path.join(this.historyDirectory,active.id+'.json');
           active.threadId=this.data.threadId;
           active.preview=(this.data.messages.findLast(m=>m.text)?.text??'').replace(/\s+/g,' ').slice(0,120);
-          active.title=(this.data.messages.find(m=>m.role==='user')?.text.trim().replace(/\s+/g,' ')||active.title).slice(0,60);
+          if(active.titleSource!=='manual')active.title=(this.data.messages.find(m=>m.role==='user')?.text.trim().replace(/\s+/g,' ')||active.title).slice(0,60);
           active.updatedAt=Date.now();active.messageCount=this.data.messages.length;
         }
       }

@@ -2,14 +2,18 @@
 
 macOS·Windows 환경 준비, 빌드 명령과 결과물, 플랫폼별 검증·배포 범위는 [빌드 가이드](BUILD_GUIDE.md)를 참고한다.
 
+alpha.15의 [기능 도입 기록](BUDDY_EXPANSION_RESULT_2026-10-10.md)과 alpha.16의 [예외 수정 결과](CHANGE_REMEDIATION_RESULT_2026-10-10.md)에 첨부 입력·큐 편집·알림·이미지 활용·대화 metadata·목적/스킬·사용량의 수명과 검증을 기록했다. 아래 기존 모듈 경계를 확장했고 별도 큐/클립보드 프레임워크는 만들지 않았다.
+
+계정 사용량 조회는 프로세스와 상태 revision을 확인해 오래된 응답을 적용하지 않는다. 이미지 조회는 검증한 바이트·파일만 반환하고 미리보기 IPC에서만 base64를 만든다. 스킬 목록 파일은 비동기로 제한 읽기하며 조회 중 연결·폴더·목록 변경을 확인한다. 렌더러의 읽음 ACK는 메시지 영역과의 실제 교차·미리보기 준비를 확인하고, 진행 정보와 큐는 값 변경 때만 갱신한다. 예약된 상태 전송은 종료·창 파괴를 다시 확인한다.
+
 ```text
 캐릭터 창 ───┐
 안내 말풍선 ─┼─ 좁은 preload IPC ─ main.cjs ─ codex.cjs ─ Codex app-server (stdio)
 대화창 ─────┘                      │
                                  ├─ packs.cjs: 팩 검증·이미지 데이터
-                                 ├─ connection-setup.cjs: CLI 탐색·인증 시도 수명
+                                 ├─ connection-setup.cjs: CLI 탐색·버전·인증 시도 수명·정제한 계정 한도
                                  ├─ response-images.cjs: 응답 이미지 검증·원본/미리보기 보관
-                                 ├─ attachments.cjs: 선택 파일의 불변 사본·조회 검증
+                                 ├─ attachments.cjs: 선택/드롭 파일과 클립보드 바이트의 불변 사본·조회 검증
                                  └─ store.cjs: 설정·소유 대화 목록·대화별 파일
 ```
 

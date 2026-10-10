@@ -19,6 +19,16 @@ test('file selection rejects links, directories, empty/oversized files and unsup
   for(const file of [empty,large,link,root])await assert.rejects(library.import([file]),/파일|16MiB/);await assert.rejects(library.import([text],{imagesOnly:true}),/PNG/);await assert.rejects(library.import(Array(9).fill(text)),/8개/);assert.equal(fs.readFileSync(text,'utf8'),'preserve');
 });
 
+test('clipboard bytes are captured immutably and reject unsafe names and inconsistent input',async t=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'onggi-clipboard-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+  let release;const images=new ResponseImages(path.join(root,'images'),{validate:async pack=>{await new Promise(resolve=>{release=resolve;});pack.thumbnail=pack.imageFiles[0].source;}}),library=new AttachmentStore(path.join(root,'attachments'),images);
+  const source=Buffer.from(png),pending=library.import([{name:'붙여넣기.png',bytes:source}],{imagesOnly:true});
+  const deadline=Date.now()+1000;while(!release&&Date.now()<deadline)await new Promise(resolve=>setTimeout(resolve,5));assert.ok(release);source.fill(0);release();
+  const [image]=await pending;assert.ok(fs.readFileSync(library.read(image).file).equals(png));
+  for(const entry of [{name:'../escape.png',bytes:png},{name:'x.png',bytes:'not bytes'},{name:'x.png',bytes:Buffer.alloc(0)},{name:'x.png',bytes:png,path:root}])await assert.rejects(library.import([entry]),/첨부|파일/);
+  await assert.rejects(library.import([{name:'unsupported.png',bytes:Buffer.from('ordinary text')}],{imagesOnly:true}),/PNG/);
+});
+
 test('attachment quota counts orphan files, deduplicates and never follows a replaced storage root',async t=>{
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'onggi-attachment-quota-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));const library=new AttachmentStore(path.join(root,'attachments'),{}),source=path.join(root,'source.txt');fs.writeFileSync(source,'keep');
   const [first]=await library.import([source]),[duplicate]=await library.import([source]);assert.equal(first.hash,duplicate.hash);assert.equal(fs.readdirSync(library.root).length,1);

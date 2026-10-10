@@ -1,0 +1,154 @@
+# my_budy alpha16 변경 코드 재검토
+
+2026년 10월 10일, `0.1.0-alpha.16`의 현재 작업 트리를 직접 검토했다. HEAD 대비 수정된 32개 파일, 추가된 픽셀 콩 팩·확장 검사·분석 문서를 대상으로 변경 diff와 호출·저장·복원 경로를 확인했다. 직전 [수정 결과](/Users/jhpark/code/my_budy/docs/CHANGE_REMEDIATION_RESULT_2026-10-10.md)의 R01–R08과 최적화가 기준이다. alpha15의 [이전 검토](/Users/jhpark/code/my_budy/docs/CHANGE_REVIEW_2026-10-10.md)는 당시 코드의 기록으로 유지한다.
+
+새로 재현한 결함은 **P2 2건, P3 2건**이다. R09는 편집 진입 중 일반 초안 유실, R10은 단축키 fallback과 무관한 설정 저장의 결합이다. R11·R12는 사용량의 일부 항목 누락과 잘못된 연결 안내다. 현재 검사 110개는 통과하지만 이 네 조합을 모두 검사하지는 않는다. 이번 요청은 검토·보고이므로 제품 소스와 실행 묶음은 수정하지 않았다.
+
+## 확인된 이슈
+
+| 순서 | ID | 우선순위 | 재현한 결과 | 현재 코드 |
+|---|---|---|---|---|
+| 1 | R09 | P2 | 대기 질문 편집 응답을 기다리며 추가한 일반 초안이 사라짐 | [renderer.mjs:556](/Users/jhpark/code/my_budy/src/ui/renderer.mjs:556) |
+| 2 | R10 | P2 | 선호 단축키 충돌로 fallback을 쓰는 상태에서 글자 크기·알림 설정도 저장 거절 | [main.cjs:1191](/Users/jhpark/code/my_budy/src/main.cjs:1191) |
+| 3 | R11 | P3 | 전체 한도 조회 중 단일 버킷 이벤트가 오면 다른 버킷도 폐기 | [connection-setup.cjs:41](/Users/jhpark/code/my_budy/src/connection-setup.cjs:41) |
+| 4 | R12 | P3 | 사용량 이벤트에 표시할 창이 없으면 정상 연결도 연결 끊김으로 안내 | [renderer.mjs:371](/Users/jhpark/code/my_budy/src/ui/renderer.mjs:371) |
+
+P2는 일상 동작에서 데이터나 기능을 잃는 경로이고, P3는 다시 조회하거나 문구를 보완하면 회복할 수 있는 범위다. 이 검토에서 새 P0/P1 결함을 확인하지는 못했다.
+
+### R09 편집 진입 중 추가한 초안 유실
+
+대기열의 `수정` 콜백은 먼저 일반 입력의 `draft`와 첨부 목록을 잡고 `await act('edit-queued')`를 실행한다. 응답 전에는 `queueEditingUI`가 없으며 별도 진입 대기 상태도 없다. [입력 잠금](/Users/jhpark/code/my_budy/src/ui/renderer.mjs:72)은 `queueEditingUI`와 저장 상태를 기준으로 하므로 일반 입력은 계속 가능하다. 응답이 오면 잡아 둔 초안을 편집 복원용으로 넣고 입력을 대기 질문으로 교체한다.
+
+실제 렌더러 콜백을 VM에서 실행하고 IPC Promise만 지연시켰다. `작성 중 초안` 상태에서 수정을 누른 뒤 ` + 대기 중에 계속 입력한 내용`을 입력하고 응답을 완료했다. 편집 종료의 실제 복원 코드를 실행하면 `작성 중 초안`만 돌아오고 추가 문장은 없어진다. 질문 저장·모델 실행의 유실을 재현한 것은 아니며 **아직 보내지 않은 일반 초안의 유실**이다. 느린 IPC 또는 메인 프로세스 지연이 발생할 때 열리는 경로다.
+
+기존 Electron 검사의 `normalDraftRestored`는 수정 버튼을 누르기 전에 작성한 초안을 확인한다. 편집 진입의 await 사이에 입력한 경우를 덮지 못한다. 정상 reload 수명 수정인 R01과도 다른 문제다.
+
+권장 수정은 기존 렌더러 안에 편집 진입 대기 상태를 두고, 응답 적용 전까지 입력·전송·첨부와 충돌하는 조작을 함께 제어하는 것이다. 성공·실패·대상 취소에서 반드시 해제하고, 늦은 응답이 다른 대화나 종료된 편집을 덮어쓰지 않게 확인한다. 작은 상태 처리 때문에 새 모듈이나 헬퍼를 만들 필요는 없다.
+
+수용 기준은 지연 응답 중 초안 보존, 실패 시 입력 복구, 대상 질문 취소와 응답 순서 교차, 첨부 초안 보존, reload 이후 예약 해제다. 일반 질문 접수의 FIFO·모델 snapshot·저장 실패 방어는 유지한다.
+
+### R10 단축키 fallback 때문에 다른 설정 저장 실패
+
+[시작 등록](/Users/jhpark/code/my_budy/src/main.cjs:571)은 저장된 선호 단축키가 충돌하면 `CommandOrControl+Shift+Space`를 fallback으로 사용한다. 이때 `settings.hotkey`는 선호 값, `activeShortcut`은 fallback으로 서로 다를 수 있다. 이 차이를 UI에서 안내하고 재등록 버튼을 제공하는 것은 적절하다.
+
+그러나 설정 저장에서는 `next.hotkey !== activeShortcut`을 **요청에 hotkey가 있는지와 무관하게** 평가한다. 예를 들어 선호 키가 `CommandOrControl+Shift+B`, 동작 중인 키가 fallback인 상태에서 `{fontScale:110}`을 저장해도 충돌 중인 B를 다시 등록한다. 등록 실패는 글자 크기 저장까지 거절한다. `{notifySound:true}`도 같은 결과다.
+
+실제 main IPC와 임시 Store를 사용하고 등록 결과만 충돌로 모의했다. 두 요청 모두 단축키 오류로 끝났고 글자 크기 100·알림 소리 false가 그대로 남았다. 기존 fallback 자체는 정상 등록된 상태였다. OS에서 실제 키를 선점한 검사는 아니다.
+
+단축키 등록과 해제는 **hotkey를 명시한 요청에만** 수행하도록 좁히고, 동일 키 재등록과 fallback에서 선호 키 재시도는 그대로 지원하는 것이 권장된다. 기존 설정 저장 실패의 등록 rollback도 유지해야 한다.
+
+수용 기준은 fallback 상태에서 글자·정숙·알림 설정 저장 성공, 명시적 선호 키 재시도의 충돌 안내, 충돌 해소 후 전환 성공, 같은 키 재등록의 자기 해제 방지, 저장 실패 때 이전 키와 설정 유지다.
+
+### R11 최신 한도 이벤트를 보호하면서 다른 항목도 빠짐
+
+R03의 revision 검사는 계정 변경 후 이전 값을 되살리지 않고 최신 이벤트를 오래된 RPC가 덮어쓰지 않게 한다. 이 방어는 유지해야 한다. 다만 `usageRevision`은 전체 사용량 객체에 하나만 있다. 한 버킷의 이벤트만 와도 지연된 `account/rateLimits/read` 응답 전체를 폐기한다.
+
+첫 조회를 지연시키고 Codex 31% 이벤트를 먼저 보낸 뒤 Codex 23%와 image 40%가 포함된 전체 응답을 반환했다. 실제 `ConnectionSetup`의 결과는 Codex 31% 하나이며 image 버킷은 없고 상태는 `ready`다. 최신 31%의 보호는 성공하지만 **이벤트와 무관한 image 버킷도 전달되지 않는다**. 계정을 바꾼 사례나 실제 계정의 한도 값이 아니며 모두 로컬 fixture다. 다시 조회하면 복원 가능한 P3 범위다.
+
+계정·프로세스 수명 변경은 전체 폐기로 유지하되, 같은 계정의 버킷별 갱신은 별도로 구분하는 방식이 적절하다. RPC 결과에서 이후 이벤트가 없는 버킷만 보완하고 최신 이벤트의 값은 유지한다. 오래된 스냅샷 값을 새 실시간 값으로 표시하지 않도록 조회 시점도 보존한다. 전체 조회를 버리기로 유지한다면 일부 범위 미확인 표시와 재조회 경로가 필요하다.
+
+수용 기준은 다중 버킷 첫 조회와 단일 이벤트 순서 교차, 최신 버킷 값 보존, 미갱신 버킷 보존, 계정 변경 후 모든 이전 버킷 거절, 오래된 미지원 오류 거절이다. 기존 16개 제한과 개인 계정 필드 제외도 유지한다.
+
+### R12 사용량 정보 부족을 연결 종료로 안내
+
+[updateUsage](/Users/jhpark/code/my_budy/src/connection-setup.cjs:32)는 이벤트에서 쓸 수 있는 primary/secondary가 없으면 이전 수치를 보존하고 `stale`로 바꾼다. `disconnected`도 같은 상태를 사용한다. UI는 `stale`을 항상 `연결이 끊겨 이전 값을 표시해요.`로 설명한다.
+
+사용량이 있는 정상 연결에 `{primary:null,secondary:null}` 이벤트만 보냈다. 프로세스는 존재하고 인증 상태는 `ready`이며 disconnected 이벤트는 발생하지 않았다. 실제 UI 표시 코드를 실행한 결과는 연결 끊김 문구였다. 현재 단위 검사는 비어 있는 이벤트의 `stale` 상태는 확인하지만 이 안내의 의미는 확인하지 않는다.
+
+현 상태 모델을 유지하면서 `이전 값 · 최신 한도 확인 필요`처럼 연결 종료를 단정하지 않는 문구로 바꾸면 된다. 재연결 버튼이나 추가 상태 관리자까지 만들 사안은 아니다. 수용 기준은 정상 연결의 빈 이벤트와 실제 연결 종료 모두에서 사실에 맞는 안내, 이전 값·조회 시점 보존이다.
+
+네 이슈의 [재현 결과](/Users/jhpark/code/my_budy/artifacts/alpha16-review-repro.json)와 [실행 스크립트](/Users/jhpark/code/my_budy/artifacts/alpha16-review-repro.cjs)는 실제 소스 콜백·클래스·IPC를 사용한다. Electron·클립보드·네이티브 알림 실기나 실제 모델 요청을 실행한 증거로 사용하지 않는다.
+
+## 직전 수정의 재확인
+
+| 범위 | 현재 코드에서 다시 확인한 사항 | 이번 판정 |
+|---|---|---|
+| R01 편집/reload | 정상 loading에서 저장 중이 아닌 예약·편집 첨부 해제, 수동 보류. 저장 중에는 세대 검사와 finally 정리 | 기존 수정 유지. 진입 await의 R09는 별도 |
+| R02 읽음 | 완료된 소유 답변·실제 메시지 영역 교차·미리보기 준비·탭/잠금/절전 확인, scroll 재확인 | 기존 수정 유지. 카드 일부 교차·첫 이미지 기준이며 모든 내용을 읽었다는 뜻은 아님 |
+| R03 사용량 | 로그아웃·연결 종료·dispose·최신 이벤트 이후 오래된 성공/오류 거절 | 회귀 통과. 다중 버킷의 R11 보완 필요 |
+| R04 도구 결과 | declined/failed/completed/stopped 분리, MCP isError 확인, Store 복원과 UI 안내 일치 | 회귀 통과 |
+| R05 단축키 | 동일 키 재등록·등록 성공 후 자기 해제 방지·저장 실패 정리·fallback 재시도 버튼 | 회귀 통과. 다른 설정과의 결합 R10 보완 필요 |
+| R06 검색 | 입력/해제 revision으로 오래된 검색 결과와 상태 적용 방지 | 회귀 통과. 입력마다 전체 기록을 읽지 않음 |
+| R07 승인 알림 | 표시 직전 요청/작업 ID 확인, 해결 후 기존 알림 닫기, 늦은 클릭 거절 | 회귀 통과. native 지원 확인 예외도 처리 |
+| R08 창 종료 | 예약 callback의 quitting 재검사, 파괴된 패널 조회 방지, 알림 클릭의 창 수명 확인 | 회귀 통과. 실제 사용자 종료 전 범위의 OS 실기를 완료했다는 주장은 없음 |
+
+해당 단위 회귀와 기존 통합의 검증 시점은 아래 표로 구분한다. 검사 통과만으로 아직 검사하지 않은 조합까지 안전하다고 확대하지 않는다.
+
+## 최적화·주석·헬퍼·데드코드
+
+### 이미지·DOM·I/O
+
+이미지 캐시 `read`는 `{file,bytes}`만 반환한다. 두 미리보기 IPC에서 base64를 생성하며 원본 열기·내보내기·모델 입력에서는 이를 다시 만들지 않는다. 기존 단위 검사도 바이너리 조회 중 base64 변환이 발생하면 실패하도록 확인한다. 원본 hash·형식·크기·링크 검사와 저장 대화상자 이후의 소유권 재검증은 남아 있다.
+
+**O11: 이미지 저장의 대화상자 전 원본 읽기는 줄일 수 있다.** [main.cjs:968](/Users/jhpark/code/my_budy/src/main.cjs:968)은 복사/저장/재첨부 공통 진입에서 원본 전체를 읽는다. 저장은 [대화상자 후](/Users/jhpark/code/my_budy/src/main.cjs:976) 다시 읽는다. 실제 저장 action에서 조회 횟수를 기록하면 취소는 1회, 성공은 2회다. 첫 읽기를 복사/재첨부 분기로 옮기고 저장은 대화상자 이후의 검증 읽기 1회만 사용하면 된다. 무결성 확인을 생략하거나 이전 바이트를 무조건 재사용하는 변경은 권장하지 않는다. 재현은 호출 횟수이며 실제 큰 이미지 UI 지연의 측정값은 아니다.
+
+큐와 진행 정보의 DOM 갱신 signature는 현재 크기 제한에 비해 과하지 않다. 스트리밍 중 버튼을 유지하면서 disabled 속성을 갱신하는 목적이 있다. signature 자체를 버전 관리자나 범용 캐시 클래스로 다시 분리할 이유는 확인하지 못했다. R09는 캐시가 아니라 편집 진입 수명의 문제다.
+
+스킬 목록은 기존 action 안에서 비동기 파일 읽기를 수행하며 파일당 256KiB·최대 128개·링크 거절·전후 size/mtime/ctime·close와 최종 수명 확인을 유지한다. 실행 직전 한 개 스킬의 원문 hash 확인은 기존 경계다. 헬퍼를 줄인다는 이유로 목록 읽기를 동기 I/O로 되돌리지 않는다. 목록에서 파일 단위 읽기 실패는 조용히 제외하므로, 진단 편의 개선이 필요하면 제외 개수만 표시하는 작은 보완을 고려할 수 있다. 이는 실행 안전성 결함으로 판정하지 않았다.
+
+큰 기록과 이미지 내보내기는 메모리에 스냅샷·이미지 바이트를 함께 보관한다. 128MiB 내보내기·32MiB 기록 한도에서 peak memory와 메인 스레드 지연을 같은 조건으로 측정하는 C07–C09가 우선이다. 이번 조회 횟수나 과거 로컬 시간 표본을 사용자 체감 성능 향상의 비율로 표현하지 않는다.
+
+### 주석과 정리 가능성
+
+HEAD 대비 JS/CJS/MJS 변경에 새 독립 주석은 reload 편집 보존 이유 1개다. 변경 범위에서 TODO/FIXME/HACK, 완료된 작업 지시, 주석 처리한 실행 코드, eslint 억제 지시는 찾지 못했다. 자동 검색뿐 아니라 실제 주석의 코드와 현재 검증 범위를 함께 확인했다.
+
+| 주석/내용 | 판단 |
+|---|---|
+| [main.cjs:494](/Users/jhpark/code/my_budy/src/main.cjs:494) 편집 reload 보류 이유 | 동작만 보고 놓치기 쉬운 의도이며 유지 |
+| [main.cjs:475](/Users/jhpark/code/my_budy/src/main.cjs:475) OS 구석 동작 미검증 | 여전히 별도 OS 실기 범위이므로 완료 주석으로 삭제하지 않음 |
+| [main.cjs:814](/Users/jhpark/code/my_budy/src/main.cjs:814) 삭제 응답 뒤 늦은 파생 이벤트 | 실제 순서 방어 이유이며 유지 |
+| [main.cjs:1255](/Users/jhpark/code/my_budy/src/main.cjs:1255) 접수 순서와 실행/저장 순서 구분 | FIFO 책임을 설명하므로 유지 |
+| Store의 reviewState 허용 | 새 기록 생성·표시에는 쓰지 않지만 과거 기록 읽기의 호환 범위. 사용자 기록 삭제 대상으로 확대하지 않음 |
+| tokenUsage.updatedAt | 새 기록에서 제거됨. 실제 표시/저장 항목과 사용처의 추가 불일치 없음 |
+
+제품 변경에 새 이름 있는 function 선언이나 새 헬퍼 모듈은 추가되지 않았다. 연결 클래스의 사용량 정제·조회·버전 확인은 기존 연결 책임에 속한다. Store/worker, CLI 연결, 첨부/이미지 검증, 데이터 팩 검증은 실패와 신뢰 경계가 달라 통합할 이유가 없다. 테스트의 공통 harness·대기 함수는 여러 시나리오의 독립 검증 목적이다.
+
+**인라인과 한 줄 압축은 다르다.** 남은 [스킬 실패 처리](/Users/jhpark/code/my_budy/src/main.cjs:695), [이미지 작업 분기](/Users/jhpark/code/my_budy/src/main.cjs:964), [일반 접수 저장량 계산](/Users/jhpark/code/my_budy/src/main.cjs:1264)은 같은 함수 안에서 줄·들여쓰기를 정리할 수 있다. 특히 1264–1271은 주변 try 블록과 들여쓰기가 다르다. 이를 기능 결함이나 새로운 추상화의 근거로 보지 않는다. 린트는 이 스타일을 검사하지 않는다.
+
+즉시 제거할 미사용 제품 함수·임포트·중복 모듈은 확인하지 못했다. 새로운 런타임 의존성·캐릭터 실행 코드·큐 프레임워크도 없다. 픽셀 팩의 7개 상태·blink·5개 MD는 실제 manifest 또는 기존 팩 경로에서 사용한다. 외부 에셋을 내려받은 것으로 표현하지 않으며 자체 출처를 유지한다.
+
+## 예외·실패 경로
+
+| 영역 | 코드와 검사에서 확인한 방어 | 남은 한계/후속 |
+|---|---|---|
+| 질문/편집 저장 | admissionTail·저장 대기·첨부 예약, 편집 실패 원문 복원, 저장 장애 보류, cancel 저장 중 다음 실행 차단 | R09 진입 수명. 비정상 종료의 미저장 초안/부분 스트림 보존 보장은 없음 |
+| 첨부 | trusted 입력, 8개·개별 16MiB·합계 32MiB, bytes 복제·FD 제한 읽기·변경/링크/형식 검사, 후속 대화·편집 대상 재확인 | OS 클립보드·물리 드롭·IME·Windows 실기 |
+| 이미지 저장/MD 내보내기 | 소유 메시지/이미지, hash와 형식, 새 파일 wx, 실패 때 작성한 inode 확인, 외부 교체 파일·폴더 보존 | O11 중복 읽기. 내보내기 실패 때 부분 이미지 사본은 안내와 함께 남을 수 있음 |
+| 스킬/연결 | 조회 후 폴더·프로세스·revision·잠금·절전 검사, FD close, 실행 전 원문 hash, 공식 로그인 URL·시도 ID 제한 | 스킬 검사와 실제 CLI 파일 읽기 사이의 변경을 영구 고정하지 않음. 새 계정 콜백/다른 제공자 실기 |
+| 리뷰/도구 | 소유 thread/turn, 리뷰 종료 원문 우선·echo 중복 방지, 거절·실패·미확인 구분, 선택 대화 모델과 리뷰 실제 설정 구분 | 다른 모델의 리뷰 설정 적용값·추가 승인 실기. 종료 뒤 늦은 token 이벤트 처리 정책 |
+| 알림/수명 | 저장 및 이미지 처리 후 완료, 정숙·잠금·절전 억제, 해결 요청 제외, 창 파괴·quitting 확인 | OS 배너·클릭·권한 실기. unreadReply는 현재 실행의 최신 답변 표시이며 영속 읽음 목록이 아님 |
+| 사용량/설정 | 계정 이벤트 독립 처리·개인 필드 제외·수치 정제·16개 제한, 설정 저장 실패 rollback | R10/R11/R12. 조회 시점은 로컬 수신 시점이며 서버의 정확한 스냅샷 시각 보장 아님 |
+| 검사 정리 | 실제 모델 스크립트의 responsePassed/cleanupPassed 분리, 모의 성공·응답 실패·삭제 실패 검증 | expansion의 app.exit(0)는 일반 사용자 종료 전 경로를 모두 검증한 증거가 아님 |
+
+## 문서·패키지의 정확성
+
+[AGENTS.md](/Users/jhpark/code/my_budy/AGENTS.md), [개발 구조](/Users/jhpark/code/my_budy/docs/ARCHITECTURE.md), [작업 계획](/Users/jhpark/code/my_budy/TASKS.md), [버디 로드맵](/Users/jhpark/code/my_budy/docs/BUDDY_ROADMAP_2026-10-10.md)의 기존 모듈·데이터 팩·실제/체험 구분과 증거 규칙을 기준으로 했다. 보고서 작성에는 저장 문서용 write-page 스킬의 기존 형식·근거·이력 보존 원칙을 적용했다. API 의미는 기존 연결 코드와 설치 CLI가 생성한 로컬 schema를 참고했으며 새 API 지원이나 에셋 라이선스를 웹 조사한 보고서는 아니다.
+
+README/TASKS/검증 보고서는 소스 alpha16, staging build32, 일반 실행 경로 alpha14/CFBundleVersion 30, 이전 staging 복구 build31을 구분한다. 이번 Info.plist 재확인도 32/30/31이었다. version과 lockfile이 일치하고 패키징의 onggiProjectVersion·worker unpack·검사/문서 제외·로컬 ZIP·ad-hoc 서명 경계를 유지한다. 공개 Developer ID·공증·Windows 배포 완료 주장은 없다.
+
+이전 보고서는 버전/시점이 있는 검증 이력이고 데드코드가 아니다. R01–R08 수정의 검증 주장은 해당 검사 범위에서는 맞지만, `초안 보존`, `fallback`, `계정 전체`를 모든 비동기 조합까지 완료했다는 의미로 확대하면 R09–R12와 충돌한다. 다음 수정 후 새 재현과 수용 조건을 최신 결과에 반영하는 것이 적절하다. 과거 수치·실패 로그·복구 묶음을 일괄 제거하지 않는다.
+
+## 이번 검증과 근거
+
+| 검사 | 시점과 결과 | 근거 |
+|---|---|---|
+| npm run lint | 이번 재실행 통과. ESLint 미정의/미사용 변수와 CSS 문법·값·중복 검사 | [lint 로그](/Users/jhpark/code/my_budy/artifacts/alpha16-review-lint.log) |
+| npm run check | 이번 재실행 통과. 구문과 4개 기본 팩 | [check 로그](/Users/jhpark/code/my_budy/artifacts/alpha16-review-check.log) |
+| npm test | 이번 재실행 110개 통과, 실패/취소/건너뛰기 0 | [단위 로그](/Users/jhpark/code/my_budy/artifacts/alpha16-review-unit.log) |
+| 경계 재현 | 실제 코드로 R09–R12와 O11 확인. 제품 소스 수정·실제 모델 요청 0 | [재현 JSON](/Users/jhpark/code/my_budy/artifacts/alpha16-review-repro.json), [로그](/Users/jhpark/code/my_budy/artifacts/alpha16-review-repro.log) |
+| git diff --check | 이번 재실행 통과 | [diff 검사 로그](/Users/jhpark/code/my_budy/artifacts/alpha16-review-diff-check.log) |
+| Electron 통합 | 직전 수정의 14종 exit 0. 이번에는 재실행하지 않고 전체 src 22개 해시 대조, 차이/신규 파일 0 | [이전 통합 결과](/Users/jhpark/code/my_budy/artifacts/remediation-integration-verified/integration.json), [이번 대조](/Users/jhpark/code/my_budy/artifacts/alpha16-review-validation.json) |
+| 패키지 | 직전 수정의 84개 런타임 파일 검증. 이번에 재빌드·실행하지 않음 | [이전 패키지 검증](/Users/jhpark/code/my_budy/artifacts/remediation-package-verification-final.log) |
+| codesign | 이번 staging에 verify --deep --strict 재실행, exit 0 | [서명 검사 로그](/Users/jhpark/code/my_budy/artifacts/alpha16-review-codesign.log) |
+
+이번 검토에서 새 실제 모델 요청은 0회다. 네 결함의 재현은 VM·연결/등록 fixture이고 OS 장애를 일으킨 결과가 아니다. 기존 실제 모델 2회·알림 show와 이번 분석 검사를 섞지 않는다. 정상 사용자 종료·OS 알림 클릭·클립보드 왕복·Windows/Intel/혼합 DPI·새 계정 로그인·배터리 측정은 이 보고서의 완료 범위가 아니다.
+
+## 권장 작업 순서
+
+1. **R09:** 기존 렌더러 편집 진입의 입력/전송/첨부 상태를 묶어 보완하고 지연 응답·실패·취소·reload 조합을 검사한다. 사용자의 초안을 지키는 작업을 가장 먼저 한다.
+2. **R10:** 단축키 요청이 있는 경우에만 등록 책임을 수행한다. 실제 등록 상태와 선호 설정값의 구분, 명시적 재시도, 저장 실패 rollback은 유지한다.
+3. **R11·R12:** 계정 수명과 버킷 갱신을 구분해 누락을 보완하고, 정보 부족을 연결 장애로 단정하는 안내를 고친다. 실제 모델 호출 없이 연결 fixture로 검증 가능하다.
+4. **O11 및 인라인 가독성:** 저장 대화상자 앞의 중복 원본 읽기를 줄이고 현재 함수 안의 줄·들여쓰기를 정리한다. 소유권/캐시 재검증과 외부 파일 보존을 그대로 둔다.
+5. 변경한 경로의 회귀를 먼저 확인하고 린트·구문·단위를 실행한다. 큐/설정/UI 변경이 있으므로 expansion·stability 등 관련 Electron 검사를 새 코드로 수행한 뒤 필요 범위를 패키지 검증에 반영한다. OS 실기와 배포 조건은 별도 수용 범위로 유지한다.
+
+새 큐 관리자·UI 프레임워크·범용 helper를 만드는 작업이나 자료 일괄 삭제는 현재 확인된 문제 해결에 필요하지 않다.

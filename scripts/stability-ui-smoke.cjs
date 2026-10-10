@@ -22,7 +22,7 @@ module.exports = async ({app,pet,petNotice,panel,store,showPanel}) => {
     await panel.webContents.executeJavaScript(`window.onggi.action('hide-panel')`);await new Promise(r=>setTimeout(r,100));
     await panel.webContents.executeJavaScript(`document.querySelector('#character-cards').replaceChildren();window.onggi.action('sync')`);await new Promise(r=>setTimeout(r,150));
     if(await panel.webContents.executeJavaScript(`document.querySelectorAll('.character-card').length`))throw Error('Hidden panel rebuilt character DOM');
-    showPanel('settings',true);await new Promise(r=>setTimeout(r,150));if((await panel.webContents.executeJavaScript(`document.querySelectorAll('.character-card').length`))!==3)throw Error('Hidden catalog did not render when shown');showPanel('chat',true);
+    showPanel('settings',true);await new Promise(r=>setTimeout(r,150));if((await panel.webContents.executeJavaScript(`document.querySelectorAll('.character-card').length`))!==fs.readdirSync(path.join(__dirname,'../characters')).length)throw Error('Hidden catalog did not render when shown');showPanel('chat',true);
     const focusShadows=[];
     for(const skinId of ['paper','night','mono']) {
       await panel.webContents.executeJavaScript(`window.onggi.action('settings',{skinId:${JSON.stringify(skinId)}})`);

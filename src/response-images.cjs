@@ -82,7 +82,7 @@ class ResponseImages {
     try{const stat=fs.fstatSync(descriptor);if(!stat.isFile()||stat.size>16*1024*1024)throw Error('이미지 파일 크기를 확인해주세요.');const buffer=Buffer.alloc(stat.size+1);let count=0;while(count<buffer.length){const read=fs.readSync(descriptor,buffer,count,buffer.length-count,null);if(!read)break;count+=read;}if(count!==stat.size)throw Error('저장 이미지가 변경됐어요.');bytes=buffer.subarray(0,count);}finally{fs.closeSync(descriptor);}
     if(bytes.length>16*1024*1024||createHash('sha256').update(bytes).digest('hex')!==id)throw Error('저장 이미지가 변경됐어요. 대화를 다시 열어 원본을 확인해주세요.');
     if(!(mime==='image/png'&&bytes.length>=33&&bytes.subarray(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10]))&&bytes.toString('ascii',12,16)==='IHDR'||mime==='image/jpeg'&&bytes[0]===255&&bytes[1]===216&&bytes[2]===255||mime==='image/webp'&&bytes.length>=20&&bytes.toString('ascii',0,4)==='RIFF'&&bytes.toString('ascii',8,12)==='WEBP'))throw Error('저장 이미지의 형식이 올바르지 않아요.');
-    return{file,source:'data:'+mime+';base64,'+bytes.toString('base64')};
+    return{file,bytes};
   }
 }
 module.exports={ResponseImages};

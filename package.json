@@ -1,7 +1,7 @@
 {
   "name": "onggi-bot",
   "productName": "OnggiBot",
-  "version": "0.1.0-alpha.14",
+  "version": "0.1.0-alpha.16",
   "description": "A modular desktop companion connected to your local Codex CLI",
   "private": true,
   "main": "src/main.cjs",

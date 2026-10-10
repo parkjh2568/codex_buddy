@@ -1,6 +1,6 @@
 const fs=require('node:fs'),path=require('node:path'),{spawnSync}=require('node:child_process'),{createHash}=require('node:crypto');
 const root=path.join(__dirname,'..'),output=path.resolve(process.env.ONGGI_SMOKE_ROOT??path.join(root,'artifacts/integration-smoke'));
-const cases=[['attachments','--attachments-smoke'],['connection-images','--connection-image-smoke'],['assets',null],['models','--model-smoke'],['history','--history-smoke'],['timing','--timing-smoke'],['delete','--delete-smoke'],['performance','--performance-smoke'],['buddy','--buddy-features-smoke'],['floating','--floating-smoke'],['stability','--stability-smoke'],['lifecycle','--buddy-lifecycle-smoke'],['zero-pack','--buddy-lifecycle-smoke','--no-pack-fixture']];
+const cases=[['expansion','--buddy-expansion-smoke'],['attachments','--attachments-smoke'],['connection-images','--connection-image-smoke'],['assets',null],['models','--model-smoke'],['history','--history-smoke'],['timing','--timing-smoke'],['delete','--delete-smoke'],['performance','--performance-smoke'],['buddy','--buddy-features-smoke'],['floating','--floating-smoke'],['stability','--stability-smoke'],['lifecycle','--buddy-lifecycle-smoke'],['zero-pack','--buddy-lifecycle-smoke','--no-pack-fixture']];
 const requested=process.argv.slice(2);if(requested.some(name=>!cases.some(c=>c[0]===name)))throw Error('Unknown smoke case. Available: '+cases.map(c=>c[0]).join(', '));
 fs.mkdirSync(output,{recursive:true});
 const sourceHashes={};for(const entry of fs.readdirSync(path.join(root,'src'),{recursive:true,withFileTypes:true}))if(entry.isFile()){const file=path.join(entry.parentPath,entry.name);sourceHashes[path.relative(root,file)]=createHash('sha256').update(fs.readFileSync(file)).digest('hex');}
@@ -12,7 +12,7 @@ for(const [name,flag,extra]of cases){
   const args=name==='assets'?[path.join(__dirname,'asset-validation-smoke.cjs')]:[root,flag,...(extra?[extra]:[])],startedAt=new Date().toISOString(),started=Date.now();
   const log=fs.openSync(path.join(output,name+'.log'),'w');let result;
   console.log('START',name);
-  try{result=spawnSync(electron,args,{cwd:root,env,stdio:['ignore',log,log],timeout:150000,windowsHide:true});}finally{fs.closeSync(log);}
+  try{result=spawnSync(electron,args,{cwd:root,env,stdio:['ignore',log,log],timeout:150000,killSignal:'SIGKILL',windowsHide:true});}finally{fs.closeSync(log);}
   const record={name,args,profileRoot,startedAt,elapsedMs:Date.now()-started,exitCode:result.status,signal:result.signal,error:result.error?.message??null,profileRemoved:false};results.push(record);
   for(const entry of fs.readdirSync(path.join(root,'artifacts'),{withFileTypes:true}))if(entry.isFile()&&/smoke.*\.json$/.test(entry.name)&&fs.statSync(path.join(root,'artifacts',entry.name)).mtimeMs>=started-1000)fs.copyFileSync(path.join(root,'artifacts',entry.name),path.join(output,entry.name));
   const caseResults=path.join(output,name);fs.mkdirSync(caseResults,{recursive:true});

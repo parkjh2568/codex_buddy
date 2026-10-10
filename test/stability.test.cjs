@@ -13,19 +13,20 @@ function mainHarness(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(),'onggi-stability-'));
   t.after(async()=>{await store.closeWorker();fs.rmSync(root,{recursive:true,force:true});});
   let action, select;
-  const electron = {app:{isPackaged:true,setName(){},requestSingleInstanceLock:()=>true,whenReady:()=>new Promise(()=>{}),on(){}},ipcMain:{handle:(_channel,handler)=>{action=handler;}},dialog:{showOpenDialog:()=>new Promise(resolve=>{select=resolve;})},shell:{openPath:async()=>''}};
+  const electron = {globalShortcut:{register:()=>true,unregister(){}},app:{isPackaged:true,setName(){},requestSingleInstanceLock:()=>true,whenReady:()=>new Promise(()=>{}),on(){}},ipcMain:{handle:(_channel,handler)=>{action=handler;}},dialog:{showOpenDialog:()=>new Promise(resolve=>{select=resolve;})},shell:{openPath:async()=>''}};
   const fromMain = createRequire(path.join(__dirname,'../src/main.cjs'));
   const timers = [];
-  const context = vm.createContext({require:name=>name==='electron'?electron:fromMain(name),__dirname:path.join(__dirname,'../src'),process,console,Buffer,performance,setTimeout:(fn,ms)=>{timers.push({fn,ms});return timers.length;},clearTimeout(){},setInterval(){},clearInterval(){}});
+  const context = vm.createContext({require:name=>name==='electron'?electron:fromMain(name),__dirname:path.join(__dirname,'../src'),process,console,Buffer,performance,structuredClone,setTimeout:(fn,ms)=>{timers.push({fn,ms});return timers.length;},clearTimeout(){},setInterval(){},clearInterval(){}});
   vm.runInContext(fs.readFileSync(path.join(__dirname,'../src/main.cjs'),'utf8'),context);
-  const contents = {mainFrame:{}}, panel = {webContents:contents,isDestroyed:()=>false,isVisible:()=>true,messageView:null,setAlwaysOnTop(){}};
-  const pet = {webContents:{mainFrame:{}},isDestroyed:()=>false,setAlwaysOnTop(){}};
-  const notice = {webContents:{mainFrame:{}},isDestroyed:()=>false,setAlwaysOnTop(){}};
+  const originalPublish=vm.runInContext('publish',context);
+  const contents = {mainFrame:{},isDestroyed:()=>false}, panel = {webContents:contents,isDestroyed:()=>false,isVisible:()=>true,messageView:null,setAlwaysOnTop(){}};
+  const pet = {webContents:{mainFrame:{},isDestroyed:()=>false},isDestroyed:()=>false,setAlwaysOnTop(){}};
+  const notice = {webContents:{mainFrame:{},isDestroyed:()=>false},isDestroyed:()=>false,setAlwaysOnTop(){}};
   const store = new Store(root,{characterId:'onggi-clip',skinId:'paper',chatMode:'panel',demo:true,model:'old',effort:'high',serviceTier:'default',measureResponseTime:false,alwaysOnTop:true,personaModes:{},workspace:root,codexPath:'/codex'});
   fs.mkdirSync(path.join(root,'characters'));
   Object.assign(context,{testStore:store,testPanel:panel,testPet:pet,testNotice:notice});
   vm.runInContext("store=testStore;packLibrary=new PackLibrary(store.directory);panel=testPanel;pet=testPet;petNotice=testNotice;publish=()=>{};skins=[{id:'paper'},{id:'night'}];packs=[{manifest:{id:'onggi-clip'}},{manifest:{id:'next'}}];modelCatalog.models=[{model:'new',name:'New',efforts:[{value:'high'}],defaultEffort:'high',serviceTiers:[]}];codex.stop=()=>{};assetValidator.validate=async p=>p;",context);
-  return {root,store,context,timers,electron,call:(name,payload)=>action({sender:contents,senderFrame:contents.mainFrame},name,payload),select:value=>select(value)};
+  return {root,store,context,timers,electron,call:(name,payload)=>action({sender:contents,senderFrame:contents.mainFrame},name,payload),select:value=>select(value),publish:()=>{originalPublish(true);timers.at(-1).fn();}};
 }
 
 test('malformed JSON objects and known event fields fail the connection without an uncaught exception', async t => {
@@ -319,11 +320,11 @@ test('invalid remote thread and failed remote merge keep the previous local mess
 test('image completion is persisted after decode, remains an image-only reply and rejects foreign image requests',async t=>{
   const h=mainHarness(t);let release;h.context.fixtureCapture=()=>new Promise(resolve=>{release=resolve;});
   h.store.data.messages=[{id:'u',role:'user',text:'draw',status:'running'},{id:'a',role:'assistant',text:'',status:'running'}];
-  vm.runInContext("responseImages={capture:fixtureCapture,read:()=>({source:'data:image/png;base64,AA=='})};current={id:'u',replyId:'a',turnId:'turn'};codex.emit('notification',{method:'item/completed',params:{turnId:'turn',item:{id:'image',type:'imageGeneration',status:'completed',result:'fixture'}}});",h.context);
+  vm.runInContext("responseImages={capture:fixtureCapture,read:()=>({bytes:Buffer.from('AA==','base64')})};current={id:'u',replyId:'a',turnId:'turn'};codex.emit('notification',{method:'item/completed',params:{turnId:'turn',item:{id:'image',type:'imageGeneration',status:'completed',result:'fixture'}}});",h.context);
   await Promise.resolve();const finished=vm.runInContext("finishJob('completed')",h.context);await Promise.resolve();assert.equal(h.store.data.activeConversationId,null);
   release([{itemId:'image',status:'ready',id:'a'.repeat(64),previewId:'b'.repeat(64),mime:'image/png',width:2,height:2,bytes:100}]);await finished;
   const persisted=new Store(h.root,{});assert.equal(persisted.data.messages[1].images[0].status,'ready');assert.equal(persisted.data.messages[1].text,'');
-  await assert.rejects(h.call('response-image',{messageId:'foreign',imageId:'a'.repeat(64)}),/이 대화/);assert.equal((await h.call('response-image',{messageId:'a',imageId:'a'.repeat(64)})).ok,true);
+  await assert.rejects(h.call('response-image',{messageId:'foreign',imageId:'a'.repeat(64)}),/이 대화/);assert.equal((await h.call('response-image',{messageId:'a',imageId:'a'.repeat(64)})).source,'data:image/png;base64,AA==');
 });
 
 test('interrupting image preparation leaves a failed image notice in memory and on disk',async t=>{
@@ -351,4 +352,133 @@ test('mini-mode admissions preserve attachment snapshots in FIFO and prevent reu
   assert.deepEqual(Array.from(vm.runInContext('queue.map(j=>j.text)',h.context)),['first','second']);assert.equal(vm.runInContext('queue[0].attachments[0].hash',h.context),attachment.hash);assert.equal(fs.readFileSync(h.context.testAttachments.read(attachment).file,'utf8'),'first');assert.equal(new Store(h.root,{}).data.messages[0].attachments[0].hash,attachment.hash);
   await assert.rejects(h.call('attachment-preview',{id:attachment.id}),/이 대화/);await assert.rejects(h.call('send',{text:'foreign',attachmentIds:['foreign']}),/선택한 첨부/);
   await h.call('cancel',{id:vm.runInContext('queue[0].id',h.context)});assert.equal(vm.runInContext('queue[0].text',h.context),'second');assert.equal(h.store.data.messages[0].status,'interrupted');
+});
+
+test('queued edits reserve their position and restore the original question after a failed commit',async t=>{
+  const h=mainHarness(t);h.store.data.messages=[{id:'edit-user',role:'user',text:'original',status:'queued'},{id:'edit-reply',role:'assistant',text:'',status:'queued'}];h.store.save();
+  vm.runInContext("queue=[{id:'edit-user',replyId:'edit-reply',text:'original',attachments:[],selection:{model:'captured'},mode:'demo'}];current={id:'held'};",h.context);
+  const edit=await h.call('edit-queued',{id:'edit-user'});assert.equal(vm.runInContext('queue[0].editing',h.context),true);
+  h.store.saveAsync=async()=>{throw Error('edit disk full');};await assert.rejects(h.call('save-queued',{id:edit.id,token:edit.token,text:'new text'}),/disk full/);
+  assert.equal(h.store.data.messages[0].text,'original');assert.equal(vm.runInContext('queue[0].text',h.context),'original');assert.equal(vm.runInContext('queueEdit.saving',h.context),false);
+  h.store.saveAsync=async()=>{};await h.call('save-queued',{id:edit.id,token:edit.token,text:'new text'});assert.equal(h.store.data.messages[0].text,'new text');assert.equal(vm.runInContext('queue[0].selection.model',h.context),'captured');assert.equal(vm.runInContext('queueEdit',h.context),null);
+});
+
+test('terminal queued cancellation prevents dispatch until its storage operation finishes',async t=>{
+  const h=mainHarness(t);let release;h.store.saveAsync=()=>new Promise(resolve=>{release=resolve;});h.store.data.messages=[{id:'cancel-u',role:'user',text:'cancel',status:'queued'},{id:'cancel-a',role:'assistant',text:'',status:'queued'}];
+  vm.runInContext("queue=[{id:'cancel-u',replyId:'cancel-a'}];",h.context);const pending=h.call('cancel-all-queued',{});
+  vm.runInContext("queue.push({id:'later'});",h.context);await vm.runInContext('runQueue()',h.context);assert.equal(vm.runInContext('current',h.context),null);assert.equal(vm.runInContext('queueControlSaving',h.context),1);
+  vm.runInContext("queuePauses.add('manual');",h.context);release();await pending;assert.equal(vm.runInContext('queue[0].id',h.context),'later');assert.equal(vm.runInContext('queueControlSaving',h.context),0);
+});
+
+test('manual pause survives clearing transient causes and storage blockage retains queued drafts',async t=>{
+  const h=mainHarness(t);await h.call('pause-queue',{});vm.runInContext("queuePauses.add('connection');queue=[{id:'q'}];",h.context);h.store.writeBlocked=true;
+  await assert.rejects(h.call('continue-queue',{}),/복구/);await vm.runInContext('runQueue()',h.context);assert.equal(vm.runInContext('queue.length',h.context),1);assert.equal(vm.runInContext("queuePauses.has('manual')&&queuePauses.has('storage')",h.context),true);
+});
+
+test('hotkey collision and failed persistence keep the existing registered shortcut',async t=>{
+  const h=mainHarness(t),registered=new Set(['CommandOrControl+Shift+Space']);let reject=false;Object.assign(h.electron.globalShortcut,{register:key=>{if(reject)return false;registered.add(key);return true;},unregister:key=>registered.delete(key)});
+  reject=true;await assert.rejects(h.call('settings',{hotkey:'CommandOrControl+Shift+B'}),/사용 중/);assert.deepEqual([...registered],['CommandOrControl+Shift+Space']);
+  reject=false;h.store.save=()=>{throw Error('setting full');};await assert.rejects(h.call('settings',{hotkey:'CommandOrControl+Shift+B'}),/full/);assert.deepEqual([...registered],['CommandOrControl+Shift+Space']);assert.equal(vm.runInContext('activeShortcut',h.context),'CommandOrControl+Shift+Space');
+});
+
+test('manual conversation title and pins survive worker saves and legacy records default to automatic',async t=>{
+  const h=mainHarness(t);h.store.data.messages=[{id:'title-u',role:'user',text:'자동 제목',status:'completed'}];h.store.save();const id=h.store.data.activeConversationId;
+  await h.call('conversation-meta',{id,title:'내가 정한 제목',pinned:true});h.store.data.messages.push({id:'title-a',role:'assistant',text:'새 응답',status:'completed'});await h.store.saveAsync();const restored=new Store(h.root,{});assert.equal(restored.data.conversations[0].title,'내가 정한 제목');assert.equal(restored.data.conversations[0].titleSource,'manual');assert.equal(restored.data.conversations[0].pinned,true);
+  const file=JSON.parse(fs.readFileSync(h.store.file));delete file.conversations[0].titleSource;delete file.conversations[0].pinned;fs.writeFileSync(h.store.file,JSON.stringify(file));const legacy=new Store(h.root,{});assert.equal(legacy.data.conversations[0].titleSource,'auto');assert.equal(legacy.data.conversations[0].pinned,false);
+});
+
+test('queued review edits reject image inputs and block new attachment dialogs during a commit',async t=>{
+  const h=mainHarness(t);h.store.data.messages=[{id:'review-edit',role:'user',text:'review request',status:'queued'},{id:'review-reply',role:'assistant',text:'',status:'queued'}];h.store.save();
+  vm.runInContext("queue=[{id:'review-edit',replyId:'review-reply',text:'review request',attachments:[],selection:{},purpose:'review'}];current={id:'held'};",h.context);const edit=await h.call('edit-queued',{id:'review-edit'});
+  vm.runInContext("pendingAttachments.set('fixture-image',{attachment:{id:'fixture-image',kind:'image',bytes:20},conversationId:store.data.activeConversationId,editingJobId:'review-edit'});",h.context);
+  await assert.rejects(h.call('save-queued',{id:edit.id,token:edit.token,text:'edited review',attachmentIds:['fixture-image']}),/이미지 첨부/);assert.equal(h.store.data.messages[0].text,'review request');assert.equal(vm.runInContext('queue[0].text',h.context),'review request');
+  vm.runInContext('queueEdit.saving=true;',h.context);await assert.rejects(h.call('pick-attachments',{kind:'image'}),/준비 작업/);
+});
+
+test('failed Markdown image export retains files added by the user to the new output folder',async t=>{
+  const h=mainHarness(t),file=path.join(h.root,'export.md'),folder=path.join(h.root,'export.assets'),bytes=Buffer.from('owned fixture bytes');
+  h.electron.dialog.showSaveDialog=async()=>({canceled:false,filePath:file});h.context.exportImageBytes=bytes;vm.runInContext('responseImages={read:()=>({bytes:exportImageBytes})};',h.context);
+  h.store.data.messages=[{id:'export-reply',role:'assistant',text:'keep original',status:'completed',images:[{id:'a'.repeat(64),mime:'image/png',status:'ready',bytes:bytes.length},{id:'b'.repeat(64),mime:'image/png',status:'ready',bytes:bytes.length}]}];h.store.save();const id=h.store.data.activeConversationId,write=fs.promises.writeFile;
+  t.mock.method(fs.promises,'writeFile',async(destination,...args)=>{if(destination===path.join(folder,'2.png'))throw Error('fixture export disk full');const result=await write(destination,...args);if(destination===path.join(folder,'1.png'))await write(path.join(folder,'user-note.txt'),'user added content',{flag:'wx'});return result;});
+  await assert.rejects(h.call('export-conversation',{id,includeImages:true}),/부분 이미지/);assert.equal(fs.readFileSync(path.join(folder,'user-note.txt'),'utf8'),'user added content');assert.equal(fs.existsSync(file),false);assert.equal(h.store.data.messages[0].text,'keep original');
+});
+
+test('image save failure never unlinks a replacement file created after the exclusive open',async t=>{
+  const h=mainHarness(t),file=path.join(h.root,'save.png'),bytes=Buffer.from('owned fixture');h.electron.dialog.showSaveDialog=async()=>({canceled:false,filePath:file});h.context.saveImageBytes=bytes;vm.runInContext('responseImages={read:()=>({bytes:saveImageBytes})};',h.context);
+  h.store.data.messages=[{id:'save-reply',role:'assistant',text:'keep',status:'completed',images:[{id:'a'.repeat(64),mime:'image/png',status:'ready',bytes:bytes.length}]}];h.store.save();
+  const open=fs.promises.open;t.mock.method(fs.promises,'open',async(destination,...args)=>{const handle=await open(destination,...args);if(destination!==file||args[0]!=='wx')return handle;return{stat:()=>handle.stat(),sync:()=>handle.sync(),close:()=>handle.close(),writeFile:async()=>{fs.renameSync(file,file+'.owned-partial');fs.writeFileSync(file,'foreign replacement');throw Error('fixture image disk full');}};});
+  await assert.rejects(h.call('save-response-image',{messageId:'save-reply',imageId:'a'.repeat(64)}),/저장하지 못/);assert.equal(fs.readFileSync(file,'utf8'),'foreign replacement');assert.equal(h.store.data.messages[0].text,'keep');
+});
+
+test('declined tools, MCP errors and unknown terminal states remain distinct after reload',t=>{
+  const h=mainHarness(t);h.store.data.threadId='owned-thread';h.store.data.messages=[{id:'tool-u',role:'user',text:'review',status:'completed'},{id:'tool-a',role:'assistant',text:'reply',status:'completed'}];
+  vm.runInContext("current={id:'tool-u',replyId:'tool-a',turnId:'owned-turn'};",h.context);
+  for(const item of [{id:'command',type:'commandExecution',status:'declined'},{id:'files',type:'fileChange',status:'declined'},{id:'mcp',type:'mcpToolCall',status:'completed',result:{isError:true}},{id:'search',type:'webSearch'},{id:'unknown',type:'commandExecution',status:'future-status'}]){
+    h.context.eventItem=item;vm.runInContext("codex.emit('notification',{method:'item/completed',params:{threadId:'owned-thread',turnId:'owned-turn',item:eventItem}});",h.context);
+  }
+  assert.deepEqual(Array.from(h.store.data.messages[1].progress.tools,item=>item.status),['declined','declined','failed','completed','stopped']);
+  h.store.save();const restored=new Store(h.root,{});assert.deepEqual(restored.data.messages[1].progress.tools.map(item=>item.status),['declined','declined','failed','completed','stopped']);
+});
+
+test('retrying an unregistered identical shortcut preserves the new registration and rolls back failed saves',async t=>{
+  const h=mainHarness(t),registered=new Set();let calls=0;
+  Object.assign(h.electron.globalShortcut,{register:key=>{calls++;registered.add(key);return true;},unregister:key=>registered.delete(key)});h.store.shortcut=false;
+  await h.call('settings',{hotkey:'CommandOrControl+Shift+Space'});assert.equal(calls,1);assert.equal(h.store.shortcut,true);assert.equal(registered.has('CommandOrControl+Shift+Space'),true);
+  registered.clear();h.store.shortcut=false;h.store.save=()=>{throw Error('retry save failed');};
+  await assert.rejects(h.call('settings',{hotkey:'CommandOrControl+Shift+Space'}),/save failed/);assert.equal(calls,2);assert.equal(registered.size,0);assert.equal(h.store.shortcut,false);
+});
+
+test('resolved approvals never notify and visible approval notices close when their turn ends',async t=>{
+  const h=mainHarness(t),{EventEmitter}=require('node:events'),notices=[];
+  class Notice extends EventEmitter{static isSupported(){return true;}constructor(options){super();this.options=options;this.closed=false;}show(){notices.push(this);this.emit('show');}close(){this.closed=true;this.emit('close');}}
+  h.context.ReviewNotice=Notice;h.context.testPanel.activeTab='settings';
+  Object.assign(h.store.data.settings,{notifyApproval:true,approvalDisplay:'notification',quietHoursEnabled:false});h.store.data.threadId='owned-thread';
+  h.store.data.messages=[{id:'notice-u',role:'user',text:'approval',status:'running'},{id:'notice-a',role:'assistant',text:'',status:'running'}];h.store.save();
+  vm.runInContext("NativeNotification=ReviewNotice;current={id:'notice-u',replyId:'notice-a',turnId:'owned-turn'};codex.emit('request',{id:'resolved',method:'item/commandExecution/requestApproval',params:{threadId:'owned-thread',turnId:'owned-turn'}});codex.emit('notification',{method:'serverRequest/resolved',params:{threadId:'owned-thread',requestId:'resolved'}});",h.context);
+  h.publish();assert.equal(notices.length,0);
+  vm.runInContext("codex.emit('request',{id:'visible',method:'item/commandExecution/requestApproval',params:{threadId:'owned-thread',turnId:'owned-turn'}});",h.context);
+  h.publish();assert.equal(notices.length,1);assert.equal(notices[0].closed,false);
+  await vm.runInContext("finishJob('interrupted')",h.context);h.publish();assert.equal(notices[0].closed,true);assert.equal(vm.runInContext('liveNotices.size',h.context),0);
+  class BrokenNotice{static isSupported(){throw Error('native support failure');}}
+  h.context.BrokenNotice=BrokenNotice;h.store.data.messages[1].status='running';
+  vm.runInContext("NativeNotification=BrokenNotice;current={id:'notice-u',replyId:'notice-a',turnId:'next-turn'};codex.emit('request',{id:'broken',method:'item/commandExecution/requestApproval',params:{threadId:'owned-thread',turnId:'next-turn'}});",h.context);
+  assert.doesNotThrow(()=>h.publish());assert.match(vm.runInContext('notificationIssue',h.context),/준비하지 못/);
+});
+
+test('asynchronous skill reads reject a changed workspace, process or catalog and close the file',async t=>{
+  const originalOpen=fs.promises.open;let file,release,handle;
+  t.mock.method(fs.promises,'open',async(source,...args)=>{if(source===file)await new Promise(resolve=>{release=resolve;});const opened=await originalOpen(source,...args);if(source===file)handle=opened;return opened;});
+  for(const change of ['workspace','process','catalog']){
+    const h=mainHarness(t);file=path.join(h.root,'SKILL.md');release=null;handle=null;fs.writeFileSync(file,'# skill\nBounded instructions');h.store.data.settings.demo=false;
+    h.context.skillFile=file;
+    vm.runInContext("codex.process={};codex.request=async()=>({data:[{cwd:store.data.settings.workspace,skills:[{enabled:true,name:'fixture',path:skillFile}],errors:[]}]});",h.context);
+    const pending=h.call('skills-list',{}),deadline=Date.now()+1000;
+    while(!release&&Date.now()<deadline)await new Promise(resolve=>setTimeout(resolve,5));assert.ok(release);
+    if(change==='workspace')h.store.data.settings.workspace=h.root+'-changed';
+    else if(change==='process')vm.runInContext('codex.process={};',h.context);
+    else vm.runInContext("codex.emit('notification',{method:'skills/changed',params:{}});",h.context);
+    release();await assert.rejects(pending,/스킬 목록/);assert.equal(vm.runInContext('skillsCatalog.length',h.context),0);assert.equal(handle.fd,-1);
+  }
+});
+
+test('unread acknowledgements require viewport intersection, prepared images and the visible chat owner',async t=>{
+  const source=fs.readFileSync(path.join(__dirname,'../src/ui/renderer.mjs'),'utf8'),start=source.indexOf('function acknowledgeRenderedMessages()'),body=source.slice(start,source.indexOf('\nfunction renderHistory()',start)),calls=[];
+  let bounds={top:2000,bottom:2150,left:0,right:400},preview=null;
+  const message={id:'unread',role:'assistant',status:'completed'},state={panelVisible:true,activeConversationId:'owned',unreadReply:{conversationId:'owned',messageId:'unread'},messages:[message]};
+  const context=vm.createContext({surface:'panel',activeTab:'chat',state,innerHeight:600,innerWidth:800,document:{hidden:false,querySelector:()=>({getBoundingClientRect:()=>({top:0,bottom:400,left:0,right:400})})},messageCards:new Map([['unread',{getClientRects:()=>[bounds],getBoundingClientRect:()=>bounds,querySelector:()=>preview}]]),renderAckIds:new Set(),act:name=>{calls.push(name);},requestAnimationFrame:()=>{}});
+  vm.runInContext(body,context);vm.runInContext('acknowledgeRenderedMessages()',context);assert.equal(calls.length,0);
+  bounds={top:100,bottom:250,left:0,right:400};preview={dataset:{},complete:false,naturalWidth:0};vm.runInContext('acknowledgeRenderedMessages()',context);assert.equal(calls.length,0);
+  preview.complete=true;preview.naturalWidth=2;vm.runInContext('acknowledgeRenderedMessages()',context);assert.deepEqual(calls,['notice-read']);calls.length=0;
+  message.images=[{status:'pending'}];vm.runInContext('acknowledgeRenderedMessages()',context);assert.equal(calls.length,0);message.images=[];
+  vm.runInContext("activeTab='history';acknowledgeRenderedMessages();activeTab='chat';document.hidden=true;acknowledgeRenderedMessages();",context);assert.equal(calls.length,0);
+  const h=mainHarness(t);h.store.data.messages=[{id:'unread',role:'assistant',text:'ready',status:'completed'}];h.store.save();h.context.testPanel.rendererReady=true;
+  vm.runInContext("unreadReply={conversationId:store.data.activeConversationId,messageId:'unread'};panel.activeTab='history';",h.context);await h.call('notice-read',{id:'unread'});assert.ok(vm.runInContext('unreadReply',h.context));
+  vm.runInContext("panel.activeTab='chat';screenLocked=true;",h.context);await h.call('notice-read',{id:'unread'});assert.ok(vm.runInContext('unreadReply',h.context));
+  vm.runInContext('screenLocked=false;systemSuspended=true;',h.context);await h.call('notice-read',{id:'unread'});assert.ok(vm.runInContext('unreadReply',h.context));
+  vm.runInContext('systemSuspended=false;',h.context);await h.call('notice-read',{id:'unread'});assert.equal(vm.runInContext('unreadReply',h.context),null);
+});
+
+test('deferred state publishing tolerates destroyed panels and stops after shutdown begins',t=>{
+  const h=mainHarness(t);h.context.testPanel.isDestroyed=()=>true;h.context.testPanel.isVisible=()=>{throw Error('destroyed panel must never be queried');};
+  assert.doesNotThrow(()=>h.publish());vm.runInContext('quitting=true;',h.context);assert.doesNotThrow(()=>h.timers.at(-1).fn());
 });

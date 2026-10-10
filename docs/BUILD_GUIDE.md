@@ -1,8 +1,8 @@
 # macOS·Windows 빌드 가이드
 
-기준: 2026-10-10, 프로젝트 `0.1.0-alpha.14`. 설치 앱은 build29, 이번 정리 검증용 staging은 build30이다. [첨부·대기열 전달 기록](ATTACHMENTS_AND_QUEUE_2026-10-10.md)과 [정리 결과](CLEANUP_RESULT_2026-10-10.md)에서 적용/검증 범위를 구분한다.
+기준: 2026-10-10, 프로젝트 `0.1.0-alpha.16`. 기존 일반 실행 경로의 확인값은 alpha.14/CFBundleVersion 30, 최신 검증용 staging은 build32다. [변경 이슈 수정 결과](CHANGE_REMEDIATION_RESULT_2026-10-10.md)와 [첨부·대기열 전달 기록](ATTACHMENTS_AND_QUEUE_2026-10-10.md)에서 적용/검증 시점을 구분한다. 이전 staging build31은 `dist/rollback-alpha15-build31/`에 보존한다.
 
-이 가이드는 현재 `package.json`과 `scripts/package.cjs`가 제공하는 명령을 기준으로 한다. macOS Apple Silicon 앱 생성·실행은 검증했다. Windows와 Intel Mac/Windows ARM64는 아래 코드 기반 절차를 실제 대상 환경에서 검증해야 한다. 빌드 결과물은 앱 실행 묶음이며 설치 프로그램이나 서명된 배포본은 아니다.
+이 가이드는 현재 `package.json`과 `scripts/package.cjs`가 제공하는 명령을 기준으로 한다. macOS Apple Silicon 앱 생성·실행은 검증했다. Windows와 Intel Mac/Windows ARM64는 아래 코드 기반 절차를 실제 대상 환경에서 검증해야 한다. 빌드 결과물은 앱 실행 묶음이다. macOS에는 로컬 ad-hoc 서명을 적용하며 Developer ID/공증을 갖춘 외부 배포본이나 설치 프로그램은 아니다.
 
 ## 1. 빌드 환경과 결과물
 
@@ -211,7 +211,7 @@ Windows 빌드 후에는 최소한 캐릭터 표시·실제 드래그·Snap/크�
 
 ### 다른 OS/CPU를 지정하는 옵션은 현재 없음
 
-현재 `scripts/package.cjs`는 `--staging`만 허용한다. 잘못된 인수는 앱을 덮어쓰기 전에 거절하며 타깃 OS/CPU 옵션은 지원하지 않는다.
+현재 `scripts/package.cjs`는 `--staging`과 `--electron-zip-dir <폴더>`를 허용한다. 후자는 해당 버전/OS/CPU의 공식 Electron ZIP 캐시를 사용하는 오프라인 패키징 옵션이다. 잘못된 인수는 앱을 덮어쓰기 전에 거절하며 타깃 OS/CPU 옵션은 지원하지 않는다.
 
 ```sh
 # 지원하지 않는 옵션이므로 오류로 종료하며 앱을 생성/교체하지 않음
@@ -224,10 +224,10 @@ macOS용은 Mac에서, Windows용은 Windows에서 대상 아키텍처 Node로 �
 
 | 위치 | 현재 값/역할 |
 |---|---|
-| package.json / package-lock.json | 프로젝트 `0.1.0-alpha.14` |
+| package.json / package-lock.json | 프로젝트 `0.1.0-alpha.16` |
 | scripts/package.cjs의 appVersion | 배포 앱 버전 `0.1.0`; 패키지 안의 package.json 버전도 이 값으로 변경됨 |
-| scripts/package.cjs의 buildVersion | 정리 검증용 staging `30`; 기존 설치 앱은 `29` |
-| CLI clientInfo | 소스 version과 패키징 시 보존한 onggiProjectVersion 사용: 양쪽 alpha.14 |
+| scripts/package.cjs의 buildVersion | 예외 수정 검증용 staging `32`; 기존 일반 실행 경로의 확인값은 `30` |
+| CLI clientInfo | 소스 version과 패키징 시 보존한 onggiProjectVersion 사용: 양쪽 alpha.16 |
 
 프로젝트 version만 변경해도 현재 패키징 버전이 자동으로 따라가는 구조는 아니다. 배포 시 프로젝트·빌드 버전을 함께 확인한다.
 
@@ -245,7 +245,7 @@ Windows의 네이티브 CLI와 WSL CLI는 다른 실행 환경이다. CLI 재탐
 |---|---|
 | Node 엔진 버전 오류 | `node --version`이 22.13 이상(22.x) 또는 24 이상인지 확인. 이 프로젝트는 24.x 환경 검증 |
 | `npm`을 찾을 수 없음 | Node 설치 후 새 터미널에서 확인. PowerShell은 `npm.cmd` 사용 |
-| `ENOTFOUND github.com` / Electron 다운로드 실패 | 네트워크·DNS·조직 프록시와 공식 다운로드 접근 확인. TLS 검증을 끄는 방식으로 해결하지 않음 |
+| `ENOTFOUND github.com` / Electron 다운로드 실패 | 네트워크·DNS·조직 프록시와 공식 다운로드 접근 확인. 이미 공식 ZIP이 캐시에 있으면 --electron-zip-dir 사용. TLS 검증을 끄지 않음 |
 | 예상과 다른 CPU 결과물 | `node -p "process.arch"` 확인. 하드웨어가 아니라 Node 아키텍처가 타깃 기준 |
 | ICNS 명령 실패 | macOS에서 실행하고 `sips`·`iconutil` 및 assets/icon.png 확인 |
 | 앱이 다른 PC에서 실행되지 않음 | OS/CPU 일치, Windows 전체 실행 폴더 전달, 패키징 앱 실기 테스트 확인 |
@@ -254,10 +254,10 @@ Windows의 네이티브 CLI와 WSL CLI는 다른 실행 환경이다. CLI 재탐
 
 ## 8. 외부 배포에 아직 필요한 작업
 
-현재 스크립트에는 Developer ID 서명·공증, Windows 코드 서명, DMG/PKG·Setup.exe/MSI/MSIX 생성, 자동 업데이트가 없다. 로컬 앱 묶음 생성과 외부 사용자용 설치·배포 준비는 구분한다. 서명·공증과 플랫폼별 설치 프로그램은 C10/E07/B07의 후속 범위다.
+현재 macOS 빌드는 로컬 ad-hoc 서명과 최소 JIT entitlement를 적용한다. 스크립트에는 Developer ID 서명·공증, Windows 코드 서명, DMG/PKG·Setup.exe/MSI/MSIX 생성, 자동 업데이트가 없다. 로컬 앱 묶음 생성과 외부 사용자용 설치·배포 준비는 구분한다. 서명·공증과 플랫폼별 설치 프로그램은 C10/E07/B07의 후속 범위다.
 
 이 문서를 추가하면서 Windows 아이콘 재생성에 적용되던 macOS 전용 템플릿 검증을 플랫폼 조건으로 분리했다. macOS 생성·기본 검증은 수행했고, Windows 명령의 실행 결과는 아직 확인하지 않았다.
 
 ## 검증 산출물과 이력
 
-재사용 검사는 `scripts/`에 둔다. 임시 프로필/로그는 `artifacts/`에 기록하며 사용자 원본/복구 백업은 확인 없이 지우지 않는다. build26 전달과 당시 실기 범위는 [과거 빌드 기록](history/BUILD_NOTES_2026-10-08.md)에 보존했다. 이번 소스/staging 검증과 설치 여부는 [정리 결과](CLEANUP_RESULT_2026-10-10.md)를 따른다.
+재사용 검사는 `scripts/`에 둔다. 임시 프로필/로그는 `artifacts/`에 기록하며 사용자 원본/복구 백업은 확인 없이 지우지 않는다. build26 전달과 당시 실기 범위는 [과거 빌드 기록](history/BUILD_NOTES_2026-10-08.md)에 보존했다. 현재 소스/staging 검증과 기존 설치본 보존은 [확장 결과](BUDDY_EXPANSION_RESULT_2026-10-10.md)를 따른다. build30 정리 당시의 기록은 [정리 결과](CLEANUP_RESULT_2026-10-10.md)에 유지한다.

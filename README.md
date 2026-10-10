@@ -1,8 +1,12 @@
-# 옹기봇 · Alpha 0.1 (alpha.14 소스)
+# 옹기봇 · Alpha 0.1 (alpha.16 소스)
 
 바탕화면에서 꼬물꼬물 움직이는 작은 친구에게 질문하고, 로컬 Codex CLI의 답변을 말풍선으로 받는 Electron 앱입니다. 캐릭터는 실행 코드가 없는 팩으로 교체합니다. 현재 실행 검증 환경은 macOS Apple Silicon이며 Windows를 고려한 창·아이콘 처리를 포함합니다. Windows 네이티브 실행·배포는 아직 검증하지 않았습니다.
 
 미니 말풍선·스킨·캐릭터별 Markdown 말투 모드를 추가했습니다. [최신 사례 비교·설계·검증 보고서](docs/BUDDY_MODES_REVIEW.md)
+
+alpha.16/staging build32는 편집 중 화면 복구·미읽음·사용량 응답 순서·도구 거절·검색·승인 알림·단축키 재등록과 창 종료 예외를 보완했습니다. 이미지 변환과 반복 DOM 갱신도 줄였습니다. [수정 결과와 검증 범위](docs/CHANGE_REMEDIATION_RESULT_2026-10-10.md).
+
+alpha.15/build31에서 추가한 붙여넣기·파일 드롭, FIFO 보류/편집, 생성 이미지 활용, 조용한 알림, 대화 제목·즐겨찾기·Markdown 내보내기, 목적/스킬·사용량과 픽셀 콩을 포함합니다. [기능 도입 기록](docs/BUDDY_EXPANSION_RESULT_2026-10-10.md).
 
 alpha.14/build29은 이미지·파일 첨부와 일반/미니 대화의 선입선출 대기열을 지원합니다. 입력창의 `이미지 첨부`·`파일 첨부`로 선택한 뒤 보내면 질문과 첨부 사본을 함께 보관합니다. 작업 중 전송한 질문은 최대 10개까지 대기하며 앞 작업의 종료 저장 후 차례대로 실행합니다. [구현·검증·제한](docs/ATTACHMENTS_AND_QUEUE_2026-10-10.md)을 참고합니다.
 
@@ -14,7 +18,7 @@ alpha.13/build28에서 추가한 연결 복구·로그인 안내와 생성 이�
 
 ## 실행
 
-이 PC용 최신 Apple Silicon 앱: `dist/OnggiBot-darwin-arm64/OnggiBot.app`을 실행합니다. 이미 실행 중이면 바탕화면 버디나 메뉴 막대에서 대화창을 엽니다.
+이 PC의 최신 검증 Apple Silicon 앱(alpha.16/build32)은 `dist/staging/OnggiBot-darwin-arm64/OnggiBot.app`입니다. 기존 일반 실행 alpha.14/CFBundleVersion 30 묶음은 `dist/OnggiBot-darwin-arm64/OnggiBot.app`, 이전 alpha.15/build31 복구 묶음은 `dist/rollback-alpha15-build31/`에 보존했습니다. 이미 실행 중이면 바탕화면 버디나 메뉴 막대에서 대화창을 엽니다.
 
 - 캐릭터 또는 작은 말풍선을 클릭하면 대화창이 열립니다.
 - 캐릭터 하단의 대화·잠자기·설정 메뉴는 마우스를 올리면 나타나고 3초 뒤 숨습니다. 다시 캐릭터에 마우스를 올리면 나타나며, 메뉴에 포커스가 남아 있어도 계속 표시하지 않습니다.
@@ -40,7 +44,7 @@ alpha.13/build28에서 추가한 연결 복구·로그인 안내와 생성 이�
 - 처음에는 실제 Codex 모드입니다. `체험 모드`를 켜면 모델 호출 없이 UI를 체험합니다.
 - 대화창의 `×`와 `Esc`는 창을 숨깁니다. 프로그램 종료는 메뉴 막대의 `종료`입니다.
 
-macOS 직접 설치용 로컬 알파 빌드이며 서명·공증하지 않았습니다. 다른 PC에 배포할 서명된 설치 프로그램은 후속 작업입니다.
+staging build32는 macOS 로컬 ad-hoc 서명을 검증했습니다. Developer ID·공증과 다른 PC용 설치 프로그램은 후속 작업입니다. 기존 일반 실행 묶음은 변경하지 않았습니다.
 
 개발 환경은 Node.js 22.13 이상(22.x) 또는 24 이상과 npm이 필요합니다. 검증한 환경은 Node.js 24.21.0입니다. OS별 준비·실행·패키징·결과물·Windows 검증 한계는 [macOS·Windows 빌드 가이드](docs/BUILD_GUIDE.md)를 참고합니다.
 
@@ -137,7 +141,7 @@ npm run codex:attachments # 실제 Luna/high 이미지·파일 입력 (계정 �
 npm run package     # 현재 운영체제/CPU용 앱 생성
 ```
 
-실제 모델 검증은 계정 이용량을 사용합니다. `smoke`는 실제 모델을 호출하지 않습니다. 검증 화면과 결과는 `artifacts/`에 저장하며 배포 앱에는 포함하지 않습니다.
+실제 모델 검증은 계정 이용량을 사용합니다. 계획/전용 리뷰의 제한된 개발 검사는 node scripts/real-buddy-modes-smoke.cjs이며 Luna로 두 요청을 보내고 생성한 검사 세션만 정리합니다. `smoke`는 실제 모델을 호출하지 않습니다. 검증 화면과 결과는 `artifacts/`에 저장하며 배포 앱에는 포함하지 않습니다.
 
 캐릭터 SVG 재생성: `npm run characters:generate`. 앱/메뉴 막대 PNG와 Windows ICO 재생성: `npm run icons:generate`. 사용자가 제공한 `assets/tray-source.png`를 공통 원본으로 사용합니다. macOS 메뉴 막대는 투명한 18px와 Retina용 36px를 템플릿 이미지로 표시하고, 앱/Windows 트레이는 같은 그림에 밝은 바탕을 넣습니다. 앱 상단 로고도 같은 그림을 스킨 색상으로 표시합니다. macOS `.icns` 재생성은 [개발 구조 문서](docs/ARCHITECTURE.md)를 참고합니다.
 
@@ -150,5 +154,7 @@ Slack 연동, 의미 기반 감지, 공용 서버·브로커, 음성, 자동 화
 작업 범위·완료 기준·후속 작업은 [TASKS.md](TASKS.md), 검증 근거와 제한은 [알파 검증 보고서](docs/ALPHA_REPORT.md)에 기록합니다.
 
 현재 우선순위는 로컬 대화의 안정화와 긴 기록 처리이며 Slack 호출·키워드 알림은 후순위입니다. 다중 클라이언트 FIFO 서버는 이후 과제입니다. 구조·최적화·남은 이슈와 기술 선택 이유는 [프로젝트 검토 보고서](docs/PROJECT_REVIEW.md)에 정리했습니다.
+
+버디의 대화 편의성·조용한 알림·대기열·캐릭터 시범과 Codex 선택 기능의 구현 순서, 무료 에셋 사이트의 활용·배포 조건은 [버디 확장과 에셋 계획](docs/BUDDY_ROADMAP_2026-10-10.md)에 정리했습니다. BUD00–BUD09와 O01/O04/O08의 구현 및 남은 수용 조건은 [확장 결과](docs/BUDDY_EXPANSION_RESULT_2026-10-10.md)를 따릅니다.
 
 Slack 도입에 필요한 준비물·최소 권한·연결 구조·현재 코드의 선행 변경·구현 순서와 완료 기준은 [Slack 연동 계획](docs/SLACK_INTEGRATION_PLAN.md)을 참고합니다. 2026-10-06 기준 분석 문서이며 Slack 연동 기능은 아직 구현하지 않았습니다.

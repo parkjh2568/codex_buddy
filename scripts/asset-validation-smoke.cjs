@@ -36,6 +36,7 @@ app.whenReady().then(async()=>{
     for(const content of ['<style>@keyframes flash{to{fill:red}}</style>','<g style="animation:flash 1s infinite"/>','<s:animate xmlns:s="http://www.w3.org/2000/svg"/>']){
       const candidate=loadPack(path.join(__dirname,'../characters/onggi-clip'));candidate.imageFiles[0].source='data:image/svg+xml;base64,'+Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">'+content+'</svg>').toString('base64');let rejected=false;try{await validator.validate(candidate);}catch{rejected=true;}if(!rejected)throw Error('SVG semantic policy accepted active/style content');
     }
+    const pixel=loadPack(path.join(__dirname,'../characters/onggi-pixel-bean'));await validator.validate(pixel);if(!pixel.decoded||pixel.decodedImages.some(image=>image.width!==128||image.height!==160))throw Error('Pixel buddy canvas decode mismatch');results.push({builtin:'onggi-pixel-bean',states:7,blinkFrames:pixel.animationFrames.length,decoded:true});
     const blink=loadPack(path.join(__dirname,'../characters/onggi-clip-blink'));await validator.validate(blink);blink.manifest.animation.canvas.width++;
     let inconsistent=false;try{await validator.validate(blink);}catch{inconsistent=true;}if(!inconsistent)throw Error('Inconsistent frame canvas was accepted');
     fs.writeFileSync(path.join(root,'idle.svg'),'<svg xmlns="http://www.w3.org/2000/svg"><path></svg>');fs.writeFileSync(path.join(root,'manifest.json'),JSON.stringify({schemaVersion:1,id:'decode',name:'Decode',states:{idle:'idle.svg'}}));

@@ -45,13 +45,13 @@ module.exports=async({app,panel,store,codex})=>{
     const faultJobs=await panel.webContents.executeJavaScript(`(async()=>{const first=await window.onggi.action('send',{text:'저장 실패 중 답변'});const second=await window.onggi.action('send',{text:'저장 실패 뒤 실행 금지'});return[first.id,second.id];})()`);
     const originalSave=store.saveAsync;
     store.saveAsync=async function(){this.warning='테스트: 답변 저장 실패';throw new Error('test disk full');};
-    for(let i=0;i<200&&store.data.messages.at(-1).status!=='interrupted';i++)await new Promise(r=>setTimeout(r,30));
+    for(let i=0;i<200&&!store.writeBlocked;i++)await new Promise(r=>setTimeout(r,30));
     const failedReply=store.data.messages[store.data.messages.findIndex(m=>m.id===faultJobs[0])+1],unstartedReply=store.data.messages[store.data.messages.findIndex(m=>m.id===faultJobs[1])+1];
     store.saveAsync=originalSave;
-    if(!failedReply.error?.includes('저장하지 못')||unstartedReply.status!=='interrupted'||!store.writeBlocked)throw new Error('Save failure crashed completion or continued the queue');
+    if(!failedReply.error?.includes('저장하지 못')||unstartedReply.status!=='queued'||!store.writeBlocked)throw new Error('Save failure crashed completion or continued the queue');
     const afterTurns=(await codex.request('thread/read',{threadId:store.data.threadId,includeTurns:true})).thread.turns.length;
     if(afterTurns!==beforeTurns+1)throw new Error('Queue dispatched a question after storage failure');
-    result.storageFailureHandled=true;store.writeBlocked=false;store.warning=null;store.save();
+    result.storageFailureHandled=true;store.writeBlocked=false;store.warning=null;await panel.webContents.executeJavaScript(`window.onggi.action('cancel-all-queued')`);await store.saveAsync();
     fs.writeFileSync(path.join(__dirname,'..','artifacts','timing-ui-smoke.json'),JSON.stringify({verifiedAt:new Date().toISOString(),status:'passed',result,timings:measured.map(m=>m.timing),metrics},null,2));
     console.log('TIMING_STAGES_FIFO_DISPLAY_AND_OPT_OUT_OK',JSON.stringify({settingsOpened:result.settingsOpened,measured:measured.length,queueMs:measured[1].timing.queueMs,nav:result.nav}));app.quit();
   }catch(error){console.error('TIMING_UI_SMOKE_FAILED',error);codex.stop();app.exit(1);}

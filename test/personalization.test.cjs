@@ -79,3 +79,10 @@ test('Unicode mode names and edited export reimport preserve user ownership, arc
   library.manage('onggi-clip','archive',{id});library=new PersonaLibrary(directory,[exported]);assert.ok(library.catalog()[0].entries.find(e=>e.id===id).archived);assert.throws(()=>library.read('onggi-clip',id));
   library.manage('onggi-clip','unarchive',{id});const file=path.join(library.root,'onggi-clip',id+'.md');fs.unlinkSync(file);library=new PersonaLibrary(directory,[exported]);assert.ok(!fs.existsSync(file));assert.equal(library.catalog()[0].entries.find(e=>e.id===id).kind,'user');assert.ok(library.catalog()[0].entries.find(e=>e.id===id).error);
 });
+
+test('original pixel buddy exports only referenced data and roundtrips its seven states and blink',t=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'onggi-pixel-pack-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+  const pack=loadPack(path.join(__dirname,'../characters/onggi-pixel-bean')),library=new PackLibrary(root),exported=library.export(pack,root),restored=loadPack(exported);
+  assert.equal(restored.manifest.id,'onggi-pixel-bean');assert.equal(Object.keys(restored.assets).length,7);assert.equal(restored.manifest.animation.rendering,'pixel');assert.equal(restored.animationFrames.length,3);assert.equal(restored.personas.length,5);assert.equal(restored.manifest.source,pack.manifest.source);assert.equal(restored.manifest.license,pack.manifest.license);
+  assert.ok([...restored.contents.keys()].every(file=>/\.(svg|md)$/.test(file)));assert.equal(restored.revision,pack.revision);
+});

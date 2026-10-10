@@ -38,7 +38,7 @@ app.whenReady().then(async()=>{
     const library=new ResponseImages(path.join(profile,'response-images'),new AssetValidator()),[image]=await library.capture(item,{workspace:profile});assert.equal(image.status,'ready',image.error);
     if(!imageItems){assert.equal(image.width,1024);assert.equal(image.height,1536);}
     assert.ok(fs.readFileSync(library.read(image).file).equals(Buffer.from(item.result.replace(/^data:image\/[^;]+;base64,/,''),'base64')),'Original image bytes changed');
-    const preview=library.read({id:image.previewId,mime:'image/png'});assert.ok(preview.source.startsWith('data:image/png;base64,'));const bytes=fs.readFileSync(preview.file);assert.ok(bytes.readUInt32BE(16)<=512&&bytes.readUInt32BE(20)<=512);
+    const preview=library.read({id:image.previewId,mime:'image/png'});const bytes=fs.readFileSync(preview.file);assert.ok(preview.bytes.equals(bytes));assert.ok(bytes.readUInt32BE(16)<=512&&bytes.readUInt32BE(20)<=512);
     store.data.messages=[{id:'image-only',role:'assistant',text:'',mode:'codex',status:'completed',images:[image]}];
     const attachments=new AttachmentStore(path.join(profile,'attachments'),library),document=path.join(profile,'사본 검증.txt');fs.writeFileSync(document,'PACKAGED_ATTACHMENT_MARKER');
     const imported=await attachments.import([document,library.read(image).file]);fs.writeFileSync(document,'CHANGED_SOURCE');assert.equal(fs.readFileSync(attachments.read(imported[0]).file,'utf8'),'PACKAGED_ATTACHMENT_MARKER');

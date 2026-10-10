@@ -57,8 +57,8 @@ class CodexConnection extends EventEmitter {
               message.params = params;
               if (['turn/started','turn/completed'].includes(message.method) && (!params.turn || typeof params.turn.id !== 'string' || !params.turn.id || typeof params.threadId !== 'string' || !params.threadId)) throw new Error('턴 정보가 올바르지 않습니다.');
               if (message.method === 'turn/completed' && !['completed','interrupted','failed'].includes(params.turn.status)) throw new Error('턴 종료 상태가 올바르지 않습니다.');
-              if (['item/started','item/completed'].includes(message.method) && (!params.item || typeof params.item.id !== 'string' || typeof params.item.type !== 'string' || (params.item.type === 'agentMessage' && typeof params.item.text !== 'string'))) throw new Error('항목 정보가 올바르지 않습니다.');
-              if (message.method === 'item/agentMessage/delta' && (typeof params.itemId !== 'string' || typeof params.delta !== 'string')) throw new Error('답변 조각이 올바르지 않습니다.');
+              if (['item/started','item/completed'].includes(message.method) && (!params.item || typeof params.item.id !== 'string' || typeof params.item.type !== 'string' || (['agentMessage','plan'].includes(params.item.type) && typeof params.item.text !== 'string') || ['enteredReviewMode','exitedReviewMode'].includes(params.item.type)&&typeof params.item.review!=='string')) throw new Error('항목 정보가 올바르지 않습니다.');
+              if (['item/agentMessage/delta','item/plan/delta'].includes(message.method) && (typeof params.itemId !== 'string' || typeof params.delta !== 'string')) throw new Error('답변 조각이 올바르지 않습니다.');
               if (message.method === 'item/tool/requestUserInput' && (!Array.isArray(params.questions) || !params.questions.length || params.questions.length > 32 || params.questions.some(q => !q || typeof q.id !== 'string' || !q.id || typeof q.question !== 'string' || (q.options !== undefined && q.options !== null && (!Array.isArray(q.options) || q.options.some(o => !o || typeof o.label !== 'string')))))) throw new Error('추가 질문 구성이 올바르지 않습니다.');
             }
           } catch (error) {
@@ -137,15 +137,15 @@ class CodexConnection extends EventEmitter {
     this.process.stdin.write(JSON.stringify(message) + '\n');
   }
   request(method, params, timeout = 30000) {
-    if(method==='turn/start'&&(this.active||this.turnContext&&!this.turnContext.completed))return Promise.reject(new Error('이전 턴을 마친 뒤 새 턴을 시작해주세요.'));
-    const turnContext=method==='turn/start'?{threadId:params.threadId,turnId:null,completed:false,events:[],eventBytes:0,imageBytes:0}:undefined;
+    if(['turn/start','review/start'].includes(method)&&(this.active||this.turnContext&&!this.turnContext.completed))return Promise.reject(new Error('이전 턴을 마친 뒤 새 턴을 시작해주세요.'));
+    const turnContext=['turn/start','review/start'].includes(method)?{threadId:params.threadId,turnId:null,completed:false,events:[],eventBytes:0,imageBytes:0}:undefined;
     if(turnContext)this.turnContext=turnContext;
     const id = ++this.sequence;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => { this.pending.delete(id); reject(new Error(`Codex 요청 시간 초과: ${method}`)); }, timeout);
       this.pending.set(id, { resolve, reject, timer,turnContext });
       try { this.write({ id, method, params }); } catch (error) { clearTimeout(timer); this.pending.delete(id);if(this.turnContext===turnContext)this.turnContext=null;reject(error); }
-      if (method === 'turn/start' && this.pending.has(id)) this.emit('turn-sent', { threadId:params.threadId, at:performance.timeOrigin + performance.now() });
+      if (['turn/start','review/start'].includes(method) && this.pending.has(id)) this.emit('turn-sent', { threadId:params.threadId, at:performance.timeOrigin + performance.now() });
     });
   }
   respond(id, result) { this.write({ id, result }); }
