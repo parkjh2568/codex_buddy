@@ -244,6 +244,14 @@ test('unconfirmed remote deletion survives restart without removing local files'
   const restarted=new Store(root,{});assert.equal(restarted.pendingDeletion.id,id);assert.equal(restarted.data.messages[0].text,'preserve');assert.ok(fs.existsSync(path.join(store.historyDirectory,id+'.json')));assert.equal(restarted.writeBlocked,false);
 });
 
+test('deletion completion cannot add a same-context conversation outside the persisted approval scope',t=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'onggi-delete-scope-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+  const store=new Store(root,{demo:true,workspace:'/owned',codexPath:'/codex'});store.data.messages=[{id:'first',role:'user',text:'keep',status:'completed'}];store.save();const first=store.data.activeConversationId;
+  store.newConversation();store.data.messages=[{id:'second',role:'user',text:'remove',status:'completed'}];store.save();const second=store.data.activeConversationId;store.beginDeletion(second);
+  const before=fs.readFileSync(store.deleteFile,'utf8');assert.throws(()=>store.completeDeletion([first,second]),/범위/);assert.equal(fs.readFileSync(store.deleteFile,'utf8'),before);assert.ok(fs.existsSync(path.join(store.historyDirectory,first+'.json')));
+  store.completeDeletion([second]);assert.deepEqual(store.data.conversations.map(c=>c.id),[first]);
+});
+
 test('confirmed deletion cleanup failure is completed after restart without resurrecting records', t => {
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'onggi-delete-recover-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
   const store=new Store(root,{demo:true});store.data.messages=[{id:'u',role:'user',text:'remove',status:'completed'}];store.save();const id=store.data.activeConversationId,file=path.join(store.historyDirectory,id+'.json');store.beginDeletion(id);

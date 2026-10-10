@@ -1,0 +1,16 @@
+{
+  "id": "mono",
+  "name": "흑백 갤러리",
+  "colors": {
+    "cream": "#f8f8f6",
+    "text": "#252525",
+    "muted": "#666662",
+    "line": "#ddddda",
+    "surface": "#ffffff",
+    "wash": "#eaeae7",
+    "green": "#424240",
+    "accentInk": "#ffffff",
+    "field": "#ffffff",
+    "danger": "#935747"
+  }
+}

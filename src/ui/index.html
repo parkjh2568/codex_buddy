@@ -23,47 +23,67 @@
   <main id="panel-surface" hidden>
     <div class="panel-shell">
       <header class="header">
-        <div class="brand-mark">o<span>o</span></div>
-        <div class="brand"><h1>옹기봇 <span>ALPHA</span></h1><p>당신 곁의 작은 친구</p></div>
-        <button id="open-settings" class="settings-button" data-tab="settings" aria-label="설정" title="설정">⚙︎</button>
-        <button id="close-panel" class="icon-button" aria-label="말풍선 닫기">×</button>
+        <div class="brand-mark" aria-hidden="true"></div>
+        <div class="brand"><h1><b id="buddy-title">옹기봇</b> <span>ALPHA</span></h1><p>당신 곁의 작은 친구</p></div>
+        <button id="open-settings" class="settings-button" data-tab="settings" aria-label="설정" title="설정"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m9.5 3-.6 2.2-2 .9-2-.7-2.4 4.2 1.6 1.6v2.3l-1.6 1.6 2.4 4.2 2-.7 2 .9.6 2.2h5l.6-2.2 2-.9 2 .7 2.4-4.2-1.6-1.6v-2.3l1.6-1.6-2.4-4.2-2 .7-2-.9-.6-2.2Z"/><circle cx="12" cy="12" r="3"/></svg></button>
+        <button id="close-panel" class="icon-button" aria-label="말풍선 닫기" title="닫기 · Esc"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
       </header>
       <nav class="tabs" aria-label="화면 선택">
-        <button data-tab="chat" class="active">대화</button>
+        <button data-tab="chat" class="active" aria-current="page">대화</button>
         <button data-tab="history">이전 대화</button>
       </nav>
       <section id="chat-tab" class="tab-content">
-        <div class="connection-bar"><span id="connection-label"><i></i>연결 준비</span><button id="new-chat">새 대화 ↗</button></div>
+        <div class="mini-header"><strong id="mini-buddy-title">옹기봇</strong><span id="mini-connection">Codex</span><button id="mini-settings" type="button" aria-label="미니 대화 설정">⚙</button><button id="expand-chat" type="button" aria-label="전체 대화 보기" title="전체 대화 보기">↗</button><button id="close-mini" type="button" aria-label="미니 말풍선 닫기">×</button></div>
+        <div class="connection-bar"><span id="connection-label"><i></i>연결 준비</span><div class="connection-actions"><button id="reconnect" type="button">다시 연결</button><button id="refresh-conversation" type="button" hidden>결과 다시 확인</button><button id="new-chat">새 대화 ↗</button></div></div>
+        <section id="connection-help" class="connection-help" aria-live="polite" hidden>
+          <h3 id="connection-help-title">대화 연결을 확인해요</h3><p id="connection-help-message"></p>
+          <div class="connection-help-actions"><button id="connection-retry" type="button">다시 연결</button><button id="login-chatgpt" type="button" hidden>ChatGPT로 로그인</button><button id="find-cli" type="button" hidden>자동으로 다시 찾기</button><button id="connection-workspace" type="button" hidden>작업 폴더 선택</button><button id="install-cli" type="button" hidden>설치 안내 ↗</button><button id="cancel-login" type="button" hidden>로그인 취소</button></div>
+        </section>
         <p id="history-warning" class="history-warning" hidden></p>
+        <div class="reading-area">
         <div id="messages" class="messages" aria-label="대화 기록" tabindex="0">
+          <p id="mini-welcome" hidden>작은 질문을 건네주세요.</p>
           <button id="load-older" class="load-older" hidden>이전 내용 더 보기</button>
           <div id="welcome" class="welcome">
             <div class="welcome-art"><img id="welcome-image" alt="반기는 옹기봇"><span class="spark spark-one">✦</span><span class="spark spark-two">✧</span></div>
-            <span class="eyebrow">A LITTLE FRIEND, RIGHT HERE.</span>
+            <span class="eyebrow">잠깐의 생각도, 편하게</span>
             <h2>무슨 생각 하고 있어요?</h2>
-            <p>작은 질문도, 떠오른 아이디어도.<br>여기서 편하게 이야기해요.</p>
+            <p>작은 질문도, 떠오른 생각도 편하게 나눠요.</p>
             <button class="suggestion" data-prompt="안녕! 어떤 일을 도와줄 수 있어?">어떤 일을 도와줄 수 있어? <span>↗</span></button>
             <button class="suggestion" data-prompt="오늘 해야 할 일을 정리하는 걸 도와줘.">오늘 할 일, 같이 정리해볼까? <span>↗</span></button>
           </div>
         </div>
+        <button id="jump-latest" type="button" hidden>맨 아래로 ↓</button>
+        </div>
         <div id="requests" class="requests" hidden></div>
         <div id="queue-bar" class="queue-bar" hidden></div>
         <form id="composer" class="composer">
+          <div class="attachment-toolbar"><button id="attach-image" type="button">이미지 첨부</button><button id="attach-file" type="button">파일 첨부</button><span id="attachment-hint">최대 8개 · 합계 32MiB</span></div>
+          <div id="draft-attachments" class="draft-attachments" aria-label="보낼 첨부 자료" hidden></div>
           <textarea id="prompt" rows="2" maxlength="8000" placeholder="옹기봇에게 말 걸기…" aria-label="질문 입력"></textarea>
-          <div class="composer-bottom"><span id="composer-hint">Enter 보내기 · Shift+Enter 줄바꿈</span><button id="stop" type="button" hidden>중단</button><button id="send" type="submit" aria-label="질문 보내기">↑</button></div>
-        </form>
-        <div class="model-bar" aria-label="다음 질문의 모델과 속도">
-          <div class="model-controls">
-            <select id="model-select" aria-label="대화 모델"><option value="">CLI 기본값</option></select>
-            <select id="effort-select" aria-label="추론 단계"><option value="">기본 추론</option></select>
-            <select id="speed-select" aria-label="응답 속도"><option value="default">Standard</option></select>
-            <button id="refresh-models" type="button" aria-label="모델 목록 새로고침" title="모델 목록 새로고침">↻</button>
+          <div class="composer-bottom">
+            <div class="model-bar" aria-label="다음 질문의 모델과 속도">
+              <div class="composer-settings">
+                <div class="persona-quick"><label for="persona-select" class="visually-hidden">말투</label><select id="persona-select" aria-label="다음 질문의 말투 모드"></select></div>
+                <button id="model-menu-toggle" type="button" popovertarget="model-popover" aria-label="모델 설정 열기"><svg id="model-fast-icon" class="ui-icon" viewBox="0 0 24 24" aria-hidden="true" hidden><path d="m13 2-9 12h7l-1 8 10-13h-7z"/></svg><span id="model-menu-label">모델 선택</span><small id="model-menu-effort"></small><svg class="ui-icon model-chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg></button>
+              </div>
+              <div id="model-popover" class="model-popover" popover="auto" role="dialog" aria-label="모델 설정">
+                <div class="model-menu-heading"><strong>다음 답변 설정</strong><button id="refresh-models" type="button" aria-label="모델 목록 새로고침" title="모델 목록 새로고침"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5M6.2 6.2A8 8 0 0 1 20 12M4 12a8 8 0 0 0 13.8 5.8"/></svg></button></div>
+                <div class="model-controls">
+                  <label class="model-setting-row"><span>모델</span><select id="model-select" aria-label="대화 모델"><option value="">CLI 기본값</option></select></label>
+                  <label class="model-setting-row"><span>추론</span><select id="effort-select" aria-label="추론 단계"><option value="">기본 추론</option></select></label>
+                  <label class="model-setting-row"><span>속도</span><select id="speed-select" aria-label="응답 속도"><option value="default">Standard</option></select></label>
+                </div>
+                <p class="model-menu-note">변경은 다음 질문부터 적용돼요.</p>
+              </div>
+            </div>
+            <button id="stop" type="button" hidden>중단</button><button id="send" type="submit" aria-label="질문 보내기" title="Enter 보내기 · Shift+Enter 줄바꿈">↑</button>
           </div>
           <p id="model-info" class="model-info" role="status" hidden>모델 설정을 확인할 수 있어요</p>
-        </div>
+        </form>
       </section>
       <section id="history-tab" class="tab-content history" hidden>
-        <div class="section-heading"><h2>우리의 지난 이야기</h2><p>옹기봇에서 나눈 대화만 모았어요.</p></div>
+        <div class="section-heading"><h2>우리의 지난 이야기</h2><p id="history-description">옹기봇에서 나눈 대화만 모았어요.</p></div>
         <div class="history-actions"><input id="history-search" type="search" placeholder="제목이나 최근 내용으로 찾기" aria-label="이전 대화 검색"><button id="history-new">＋ 새 대화</button></div>
         <p id="history-busy" class="settings-note" hidden>진행 중인 질문을 마치거나 취소하면 다른 대화를 열 수 있어요.</p>
         <div id="conversation-list" class="conversation-list" aria-label="옹기봇 이전 대화 목록"></div>
@@ -71,10 +91,43 @@
       </section>
       <section id="settings-tab" class="tab-content settings" hidden>
         <div class="section-heading"><div><h2>오늘의 작은 친구</h2><p>대화는 그대로, 친구의 모습만 바뀌어요.</p></div></div>
+        <form id="buddy-name-form" class="buddy-name-form">
+          <label for="buddy-name">친구 이름</label>
+          <div class="buddy-name-controls"><input id="buddy-name" type="text" maxlength="40" autocomplete="off" spellcheck="false" aria-describedby="buddy-name-hint buddy-name-status"><button id="save-buddy-name" type="submit">저장</button></div>
+          <p id="buddy-name-hint">최대 20자 · 이름은 캐릭터를 바꿔도 유지돼요.</p>
+          <p id="buddy-name-status" role="status" hidden></p>
+        </form>
         <div id="character-cards" class="character-cards"></div>
-        <button id="import-pack" class="wide-button">＋ 캐릭터 팩 가져오기</button>
+        <button id="import-pack" class="wide-button">＋ 캐릭터 팩 미리보기 · 가져오기</button>
+        <details class="settings-group pack-settings">
+          <summary>캐릭터 팩 관리</summary>
+          <label class="select-row" for="pack-manage-select"><span>팩</span><select id="pack-manage-select"></select></label>
+          <p id="pack-metadata" class="settings-note"></p>
+          <label class="switch-row"><span>편집한 말투도 내보내기<small>개인적인 내용을 포함할 수 있어요</small></span><input id="pack-export-edited" type="checkbox" role="switch"></label>
+          <div class="persona-editor-actions"><button id="pack-export" type="button">폴더 내보내기</button><button id="pack-remove" type="button">제거 · 보관</button></div>
+          <label class="select-row" for="pack-archive-select"><span>보관한 팩</span><select id="pack-archive-select"></select></label><button id="pack-restore" class="wide-button" type="button">보관한 팩 미리보기 · 복원</button>
+          <p id="pack-manage-status" class="settings-note" hidden></p>
+        </details>
+        <div class="settings-group appearance-settings">
+          <h3>화면과 대화</h3>
+          <label class="select-row" for="appearance-profile"><span>표시 프로필</span><select id="appearance-profile"><option value="custom">현재 설정 유지</option><option value="quiet">정숙</option><option value="daily">일상</option><option value="lively">생동감</option></select></label>
+          <label class="select-row" for="character-scale"><span>친구 크기</span><select id="character-scale"><option value="0.35">작게 · 35%</option><option value="0.5">기본 · 50%</option><option value="0.65">크게 · 65%</option></select></label>
+          <label class="select-row" for="skin-select"><span>화면 스킨</span><select id="skin-select"></select></label>
+          <label class="select-row" for="chat-mode"><span>버디를 누르면</span><select id="chat-mode"><option value="panel">대화창 열기</option><option value="bubble">미니 말풍선 열기</option></select></label>
+          <p class="settings-note">미니 말풍선은 최근 질문과 답변만 보여줘요. ↗로 같은 대화를 넓게 펼칠 수 있어요.</p>
+        </div>
+        <details class="settings-group persona-settings">
+          <summary>캐릭터의 성격과 말투 · Markdown 편집</summary>
+          <label class="select-row" for="persona-character"><span>캐릭터</span><select id="persona-character"></select></label>
+          <label class="select-row" for="persona-edit-mode"><span>편집할 MD</span><select id="persona-edit-mode"></select></label>
+          <form id="persona-editor-form"><label class="editor-label" for="persona-text">Markdown 페르소나</label><textarea id="persona-text" rows="7" aria-describedby="persona-editor-note" spellcheck="false"></textarea><div class="persona-editor-actions"><button id="save-persona" type="submit">MD 저장</button><button id="reload-personas" type="button">파일 다시 읽기</button><button id="open-personas" type="button">MD 폴더 ↗</button></div><p id="persona-editor-status" role="status" hidden></p></form>
+          <label class="editor-label" for="persona-mode-name">사용자 말투 이름</label><input id="persona-mode-name" maxlength="120" placeholder="예: 차분한 친구">
+          <div class="persona-editor-actions mode-management"><button id="persona-clone" type="button">저장된 MD 복제</button><button id="persona-rename" type="button">이름 변경</button><button id="persona-reset" type="button" title="현재 편집 파일을 백업한 뒤 제공된 기본 내용으로 복원">기본 내용 복원</button><button id="persona-archive" type="button">말투 보관</button><button id="persona-unarchive" type="button">보관 복원</button></div>
+          <p id="persona-editor-note" class="settings-note">기본 성격과 선택한 말투를 함께 적용해요. 수정과 모드 변경은 다음 질문부터 적용하며 기존 대화는 이어져요. 파일은 최대 16KiB예요.</p>
+        </details>
         <div class="settings-group">
           <h3>함께 지내는 방법</h3>
+          <label class="switch-row"><span>배터리에서 움직임 줄이기<small>모델·질문 실행은 바꾸지 않아요</small></span><input id="battery-saver" type="checkbox" role="switch"></label>
           <label class="switch-row"><span>움직임 줄이기<small>조용히 곁에 머물러요</small></span><input id="reduced-motion" type="checkbox" role="switch"></label>
           <label class="switch-row"><span>항상 위에 표시<small>다른 창 위에서도 만나요</small></span><input id="always-on-top" type="checkbox" role="switch"></label>
           <label class="switch-row"><span>수신 대답속도 측정<small>새 질문의 단계별 소요시간을 답변 끝에 표시해요</small></span><input id="measure-response-time" type="checkbox" role="switch"></label>
@@ -82,20 +135,30 @@
         <div class="settings-group">
           <h3>대화 연결</h3>
           <label class="switch-row"><span>체험 모드<small>실제 Codex 호출 없이 둘러보기</small></span><input id="demo-mode" type="checkbox" role="switch"></label>
+          <button id="check-connection" class="text-button" type="button">연결 상태 확인 · 다시 연결</button>
+          <details class="connection-advanced"><summary>고급 연결 설정</summary>
           <button id="pick-workspace" class="path-button"><span>작업 폴더</span><strong id="workspace-path"></strong><b>↗</b></button>
           <button id="pick-codex" class="path-button"><span>Codex CLI</span><strong id="codex-path"></strong><b>↗</b></button>
           <p class="settings-note">알파는 읽기 전용으로 시작해요. 읽기 범위는 CLI 권한 설정을 따르며 작업 폴더만으로 제한되지 않아요. 연결 설정을 바꾸면 새 대화를 시작해요.</p>
+          </details>
         </div>
-        <div class="future-card"><span>COMING NEXT</span><h3>필요한 소식을 먼저 전해요</h3><p>Slack 호출과 관심 키워드 알림은<br>다음 단계에서 만나요.</p></div>
+        <p class="future-note">Slack 호출과 관심 키워드 알림은 준비 중이에요.</p>
         <div id="pack-errors" class="settings-note" hidden></div>
         <button id="open-data" class="text-button">내 기록 · 캐릭터 폴더 열기 ↗</button>
-        <p class="version">옹기봇 0.1.0-alpha.8 · ⌘/Ctrl + Shift + Space</p>
+        <p class="version">옹기봇 알파 · ⌘/Ctrl + Shift + Space로 대화 열기</p>
       </section>
+      <dialog id="pack-preview-dialog" class="pack-dialog" aria-labelledby="pack-preview-heading">
+        <h2 id="pack-preview-heading">캐릭터 팩 미리보기</h2><div class="pack-preview-images"><figure><img id="pack-preview-image" alt="대기 모습"><figcaption>대기 모습</figcaption></figure><figure><img id="pack-preview-error-image" alt="오류 안내 모습"><figcaption>오류 안내 모습</figcaption></figure></div><p id="pack-preview-description"></p>
+        <label class="switch-row" id="pack-replace-row"><span>같은 ID의 팩 업데이트<small>편집한 말투는 보존해요</small></span><input id="pack-replace" type="checkbox"></label>
+        <label class="switch-row"><span>설치 후 이 캐릭터 선택</span><input id="pack-select-after" type="checkbox"></label><p id="pack-preview-status" class="settings-note" hidden></p>
+        <div class="delete-actions"><button id="pack-preview-cancel" type="button">취소</button><button id="pack-preview-apply" type="button">설치 · 적용</button></div>
+      </dialog>
+      <dialog id="pack-remove-dialog" class="pack-dialog" aria-labelledby="pack-remove-heading"><h2 id="pack-remove-heading">사용자 팩을 보관할까요?</h2><p id="pack-remove-description"></p><p class="settings-note">설치 목록에서 제거하고 원본 폴더를 보관해요. 대화·이름·모델·편집한 말투는 유지해요. 아래 보관 목록에서 다시 가져올 수 있어요.</p><div class="delete-actions"><button id="pack-remove-cancel" type="button">취소</button><button id="pack-remove-confirm" type="button">제거 · 보관</button></div></dialog>
       <dialog id="delete-dialog" aria-labelledby="delete-heading" aria-describedby="delete-description">
         <h2 id="delete-heading">대화를 삭제할까요?</h2><p id="delete-title"></p><p id="delete-description"></p><p id="delete-error" hidden></p>
         <div class="delete-actions"><button id="delete-cancel" type="button">취소</button><button id="delete-confirm" type="button">영구 삭제</button></div>
       </dialog>
-      <div id="toast" class="toast" role="status" hidden></div>
+      <button id="toast" class="toast" type="button" aria-live="polite" title="안내 닫기" hidden></button>
     </div>
   </main>
   <script src="renderer.bundle.js"></script>

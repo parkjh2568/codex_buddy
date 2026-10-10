@@ -1,0 +1,11 @@
+<svg width="180" height="250" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 180 250" role="img" aria-label="옹기 클립"><path d="M 72 95 C 70 113 66 156 82 162 C 101 171 107 149 106 129 L 100 57 C 96 22 54 16 38 46 C 24 70 28 154 39 185 C 51 220 86 235 112 216 C 137 198 129 156 140 143 L 147 132" fill="none" stroke="#707875" stroke-width="13" stroke-linecap="round"/>
+      <path d="M 72 95 C 70 113 66 156 82 162 C 101 171 107 149 106 129 L 100 57 C 96 22 54 16 38 46 C 24 70 28 154 39 185 C 51 220 86 235 112 216 C 137 198 129 156 140 143 L 147 132" fill="none" stroke="#b0b8b3" stroke-width="9" stroke-linecap="round"/>
+      <path d="M 72 95 C 70 113 66 156 82 162 C 101 171 107 149 106 129 L 100 57 C 96 22 54 16 38 46 C 24 70 28 154 39 185 C 51 220 86 235 112 216 C 137 198 129 156 140 143 L 147 132" fill="none" stroke="#d7dcd7" stroke-width="3" stroke-linecap="round" transform="translate(-1.5 -1)"/>
+      <ellipse cx="46" cy="88" rx="24" ry="26" fill="#b9bfba"/>
+      <ellipse cx="104" cy="99" rx="24" ry="26" fill="#b9bfba"/>
+      <ellipse cx="44" cy="83" rx="24" ry="26" fill="#fffef8"/>
+      <ellipse cx="102" cy="94" rx="24" ry="26" fill="#fffef8"/>
+      <ellipse cx="47" cy="85" rx="15" ry="18" fill="#45433e"/><ellipse cx="105" cy="96" rx="15" ry="18" fill="#45433e"/><circle cx="43" cy="79" r="4" fill="#ffffffa8"/><circle cx="101" cy="90" r="4" fill="#ffffffa8"/>
+      <path d="M27 48 Q42 43 56 48 M91 60 Q106 59 117 67" fill="none" stroke="#55504a" stroke-width="9" stroke-linecap="round"/>
+      
+      </svg>

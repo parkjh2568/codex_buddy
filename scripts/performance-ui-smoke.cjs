@@ -30,6 +30,13 @@ module.exports=async({app,panel,store,codex})=>{
     if(!delta.updated||delta.patch.upserts!==1||delta.patch.bytes>fullMessageBytes/20)throw new Error('Delta IPC did not reduce payload '+JSON.stringify(delta));
     const unchanged=await panel.webContents.executeJavaScript(`(async()=>{await window.onggi.action('sync',{includeCatalog:false});await new Promise(r=>setTimeout(r,120));return window.__patches.at(-1);})()`);
     if(unchanged.upserts!==0)throw new Error('Unchanged history was resent');
+    const jump=await panel.webContents.executeJavaScript(`(async()=>{
+      const messages=document.querySelector('#messages');messages.scrollTop=0;messages.dispatchEvent(new Event('scroll'));
+      const shown=!document.querySelector('#jump-latest').hidden;
+      document.querySelector('#jump-latest').click();await new Promise(r=>requestAnimationFrame(r));
+      return{shown,hidden:document.querySelector('#jump-latest').hidden,bottom:messages.scrollHeight-messages.scrollTop-messages.clientHeight<2};
+    })()`);
+    if(!jump.shown||!jump.hidden||!jump.bottom)throw new Error('Return to latest response failed '+JSON.stringify(jump));
     store.save();if(new Store(store.directory,{}).data.messages.length!==1000)throw new Error('History was trimmed on disk');
     await panel.webContents.executeJavaScript(`window.onggi.action('new-chat')`);
     await panel.webContents.executeJavaScript(`window.onggi.action('open-conversation',{id:${JSON.stringify(conversationId)}})`);
@@ -51,7 +58,7 @@ module.exports=async({app,panel,store,codex})=>{
     await panel.webContents.executeJavaScript(`window.onggi.action('sync',{includeCatalog:false})`);
     await panel.webContents.executeJavaScript(`(async()=>{const deadline=Date.now()+5000;while(Date.now()<deadline&&document.querySelectorAll('.message').length!==100)await new Promise(r=>setTimeout(r,25));})()`);
     fs.writeFileSync(path.join(__dirname,'..','artifacts','alpha-long-history.png'),(await panel.webContents.capturePage()).toPNG());
-    const result={messageCount:1000,fullMessageBytes,saveMs,initial,older,delta,unchanged,restored,capacityRejected,largePage,metrics};
+    const result={messageCount:1000,fullMessageBytes,saveMs,initial,older,delta,unchanged,jump,restored,capacityRejected,largePage,metrics};
     fs.writeFileSync(path.join(__dirname,'..','artifacts','performance-ui-smoke.json'),JSON.stringify({verifiedAt:new Date().toISOString(),status:'passed',result},null,2));
     console.log('LONG_HISTORY_PAGES_DELTA_AND_CAPACITY_OK',JSON.stringify({fullMessageBytes,initialBytes:initial.patch.bytes,deltaBytes:delta.patch.bytes,cards:restored.cards,saveMs,capacityRejected}));app.quit();
   }catch(error){console.error('PERFORMANCE_UI_SMOKE_FAILED',error);codex.stop();app.exit(1);}

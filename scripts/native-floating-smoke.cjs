@@ -5,7 +5,7 @@ module.exports = async ({app,pet,panel,screen,getDrag}) => {
     await new Promise(resolve=>setTimeout(resolve,3500));
     await pet.webContents.executeJavaScript(`window.onggi.action('settings',{reducedMotion:true})`);
     panel.hide();pet.setPosition(450,250);pet.webContents.send('pet-layout-changed');
-    let left=null,right=null,focused=0;const maxSize={width:pet.getBounds().width,height:pet.getBounds().height};
+    let left=null,right=null,focused=0;const expected=pet.getBounds(),maxSize={width:expected.width,height:expected.height};
     const display=screen.getPrimaryDisplay().bounds;
     pet.on('focus',()=>focused++);
     pet.on('resize',()=>{const bounds=pet.getBounds();maxSize.width=Math.max(maxSize.width,bounds.width);maxSize.height=Math.max(maxSize.height,bounds.height);});
@@ -20,8 +20,8 @@ module.exports = async ({app,pet,panel,screen,getDrag}) => {
     const timer=setInterval(async()=>{
       if(left&&right&&panel.isVisible()){
         clearInterval(timer);
-        if(focused||maxSize.width>196||maxSize.height>195){console.error('Native focus or size regression',JSON.stringify({focused,maxSize}));app.exit(1);return;}
-        const result={verifiedAt:new Date().toISOString(),status:'passed',platform:process.platform,nativePointer:true,left,right,focused,maxSize,panelOpened:true,windowsNativeVerified:process.platform==='win32'};
+        if(focused||maxSize.width>expected.width||maxSize.height>expected.height){console.error('Native focus or size regression',JSON.stringify({focused,maxSize}));app.exit(1);return;}
+        const result={verifiedAt:new Date().toISOString(),status:'passed',platform:process.platform,nativePointer:true,left,right,focused,maxSize,panelOpened:true,tilingPreviewVerified:false,windowsNativeVerified:process.platform==='win32'};
         fs.writeFileSync(path.join(__dirname,'..','artifacts','native-floating-smoke.json'),JSON.stringify(result,null,2));
         fs.writeFileSync(path.join(__dirname,'..','artifacts','floating-panel.png'),(await panel.webContents.capturePage()).toPNG());
         console.log('NATIVE_FLOATING_OK',JSON.stringify(result));app.quit();

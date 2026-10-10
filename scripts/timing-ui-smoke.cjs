@@ -43,11 +43,11 @@ module.exports=async({app,panel,store,codex})=>{
     const metrics=app.getAppMetrics().map(p=>({type:p.type,memory:p.memory,cpu:p.cpu}));
     const beforeTurns=(await codex.request('thread/read',{threadId:store.data.threadId,includeTurns:true})).thread.turns.length;
     const faultJobs=await panel.webContents.executeJavaScript(`(async()=>{const first=await window.onggi.action('send',{text:'저장 실패 중 답변'});const second=await window.onggi.action('send',{text:'저장 실패 뒤 실행 금지'});return[first.id,second.id];})()`);
-    const originalSave=store.save;
-    store.save=function(){this.warning='테스트: 답변 저장 실패';throw new Error('test disk full');};
+    const originalSave=store.saveAsync;
+    store.saveAsync=async function(){this.warning='테스트: 답변 저장 실패';throw new Error('test disk full');};
     for(let i=0;i<200&&store.data.messages.at(-1).status!=='interrupted';i++)await new Promise(r=>setTimeout(r,30));
     const failedReply=store.data.messages[store.data.messages.findIndex(m=>m.id===faultJobs[0])+1],unstartedReply=store.data.messages[store.data.messages.findIndex(m=>m.id===faultJobs[1])+1];
-    store.save=originalSave;
+    store.saveAsync=originalSave;
     if(!failedReply.error?.includes('저장하지 못')||unstartedReply.status!=='interrupted'||!store.writeBlocked)throw new Error('Save failure crashed completion or continued the queue');
     const afterTurns=(await codex.request('thread/read',{threadId:store.data.threadId,includeTurns:true})).thread.turns.length;
     if(afterTurns!==beforeTurns+1)throw new Error('Queue dispatched a question after storage failure');

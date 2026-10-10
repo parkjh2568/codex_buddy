@@ -51,7 +51,7 @@ module.exports = async ({app,pet,panel,screen,store,getAnchor,getIgnoring}) => {
     if(JSON.stringify(pet.getBounds())!==JSON.stringify(partial))throw new Error('Visible partial position was recovered unnecessarily');
     const bubble=await pet.webContents.executeJavaScript(`window.onggi.action('pet-layout',{bubbleVisible:true,controlsVisible:false})`);
     const expanded=pet.getBounds();
-    if(expanded.width!==196||expanded.height!==195||Math.abs(getAnchor().x-anchorBefore.x)>.5||Math.abs(getAnchor().y-anchorBefore.y)>.5||Math.abs(expanded.x+bubble.centerX-anchorBefore.x)>.5||Math.abs(expanded.y+expanded.height-bubble.bottom+35-anchorBefore.y)>.5)throw new Error('Bubble resize moved character anchor');
+    if(JSON.stringify(expanded)!==JSON.stringify(partial)||bubble.noticeBounds.width!==196||bubble.noticeBounds.height!==52||Math.abs(getAnchor().x-anchorBefore.x)>.5||Math.abs(getAnchor().y-anchorBefore.y)>.5||Math.abs(expanded.x+bubble.centerX-anchorBefore.x)>.5||Math.abs(expanded.y+expanded.height-bubble.bottom+35-anchorBefore.y)>.5)throw new Error('Notice changed the character window');
     await pet.webContents.executeJavaScript(`window.onggi.action('pet-layout',{bubbleVisible:false,controlsVisible:false})`);
     if(JSON.stringify(pet.getBounds())!==JSON.stringify(partial))throw new Error('Bubble shrink clamped or moved pet');
     const beforeExternal={...getAnchor()};pet.setPosition(partial.x+27,partial.y-19);await new Promise(resolve=>setTimeout(resolve,100));

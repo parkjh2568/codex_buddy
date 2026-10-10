@@ -1,0 +1,85 @@
+{
+  "schemaVersion": 2,
+  "id": "onggi-clip-blink",
+  "name": "옹기 클립 · 눈 깜빡임",
+  "description": "생동감 프로필에서 가끔 눈을 깜빡이는 친구",
+  "version": "1.0.0",
+  "size": {
+    "width": 150,
+    "height": 190
+  },
+  "bubbleAnchor": {
+    "x": 0.65,
+    "y": 0.12
+  },
+  "motion": "sway",
+  "states": {
+    "idle": "idle.svg",
+    "listening": "listening.svg",
+    "thinking": "thinking.svg",
+    "replying": "replying.svg",
+    "attention": "attention.svg",
+    "error": "error.svg",
+    "sleeping": "sleeping.svg"
+  },
+  "personas": {
+    "base": "personas/base.md",
+    "modes": [
+      {
+        "id": "friendly",
+        "name": "친절한 모드",
+        "description": "짧고 친절하게, 필요한 다음 행동까지",
+        "file": "personas/friendly.md"
+      },
+      {
+        "id": "warm-long",
+        "name": "상냥한 장문 모드",
+        "description": "차근차근 자세히 설명하는 말투",
+        "file": "personas/warm-long.md"
+      },
+      {
+        "id": "concise",
+        "name": "핵심 단답 모드",
+        "description": "이모지 없이 핵심만 짧게",
+        "file": "personas/concise.md"
+      },
+      {
+        "id": "blunt",
+        "name": "퉁퉁이 모드",
+        "description": "툴툴대는 반말, 내용은 정확하게",
+        "file": "personas/blunt.md"
+      }
+    ]
+  },
+  "author": "OnggiBot",
+  "source": "Built-in SVG character",
+  "license": "Project character assets",
+  "animation": {
+    "canvas": {
+      "width": 180,
+      "height": 250
+    },
+    "pivot": {
+      "x": 0.5,
+      "y": 1
+    },
+    "rendering": "smooth",
+    "blink": {
+      "loop": true,
+      "frames": [
+        {
+          "file": "idle.svg",
+          "durationMs": 4000
+        },
+        {
+          "file": "sleeping.svg",
+          "durationMs": 120
+        },
+        {
+          "file": "idle.svg",
+          "durationMs": 120
+        }
+      ]
+    }
+  }
+}

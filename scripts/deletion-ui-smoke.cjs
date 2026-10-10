@@ -2,11 +2,11 @@ const fs=require('node:fs');const path=require('node:path');const {Store}=requir
 module.exports=async({app,panel,store,codex})=>{
   try{
     await panel.webContents.executeJavaScript(`(async()=>{await window.onggi.action('refresh-models');await window.onggi.action('send',{text:'삭제 검증 첫 대화'});})()`);
-    for(let i=0;i<200&&store.data.messages.at(-1)?.status!=='completed';i++)await new Promise(r=>setTimeout(r,25));
+    for(let i=0;i<200&&(store.data.messages.at(-1)?.status!=='completed'||store.saving||await panel.webContents.executeJavaScript(`document.querySelector('#new-chat').disabled`));i++)await new Promise(r=>setTimeout(r,25));
     const first=store.data.activeConversationId,firstThread=store.data.threadId;
     await panel.webContents.executeJavaScript(`(async()=>{await window.onggi.action('new-chat');await window.onggi.action('send',{text:'삭제 검증 현재 대화'});})()`);
     let busyRejected=false;try{await panel.webContents.executeJavaScript(`window.onggi.action('delete-conversation',{id:${JSON.stringify(first)},confirmed:true})`);}catch(e){busyRejected=e.message.includes('진행 중인');}
-    for(let i=0;i<200&&store.data.messages.at(-1)?.status!=='completed';i++)await new Promise(r=>setTimeout(r,25));
+    for(let i=0;i<200&&(store.data.messages.at(-1)?.status!=='completed'||store.saving||await panel.webContents.executeJavaScript(`document.querySelector('#new-chat').disabled`));i++)await new Promise(r=>setTimeout(r,25));
     const second=store.data.activeConversationId,secondThread=store.data.threadId;
     const ui=await panel.webContents.executeJavaScript(`(async()=>{
       document.querySelector('[data-tab="history"]').click();let deadline=Date.now()+5000;while(Date.now()<deadline&&(document.querySelectorAll('.conversation-delete').length!==2||document.querySelector('.conversation-delete').disabled))await new Promise(r=>setTimeout(r,25));
@@ -23,7 +23,7 @@ module.exports=async({app,panel,store,codex})=>{
     let remoteGone=false;try{await codex.request('thread/read',{threadId:secondThread,includeTurns:true});}catch(e){remoteGone=e.message.includes('not loaded');}
     if(!remoteGone)throw new Error('CLI session was retained');
     await panel.webContents.executeJavaScript(`window.onggi.action('send',{text:'삭제하지 않을 세 번째 대화'})`);
-    for(let i=0;i<200&&store.data.messages.at(-1)?.status!=='completed';i++)await new Promise(r=>setTimeout(r,25));
+    for(let i=0;i<200&&(store.data.messages.at(-1)?.status!=='completed'||store.saving||await panel.webContents.executeJavaScript(`document.querySelector('#new-chat').disabled`));i++)await new Promise(r=>setTimeout(r,25));
     const third=store.data.activeConversationId,thirdThread=store.data.threadId;
     await codex.request('test/fail-next-delete',{});
     const failed=await panel.webContents.executeJavaScript(`(async()=>{

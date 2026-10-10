@@ -7,7 +7,7 @@ module.exports = async ({app,panel,store,codex}) => {
       await window.onggi.action('refresh-models');
       await window.onggi.action('send',{text:'첫 번째 옹기 이야기'});
     })()`);
-    for (let i=0;i<100 && (store.data.messages.at(-1)?.status!=='completed');i++) await new Promise(r=>setTimeout(r,50));
+    for (let i=0;i<100 && (store.data.messages.at(-1)?.status!=='completed'||store.saving||await panel.webContents.executeJavaScript(`document.querySelector('#new-chat').disabled`));i++) await new Promise(r=>setTimeout(r,50));
     const first = store.data.activeConversationId, firstThread = store.data.threadId;
     if (store.data.messages.at(-1)?.status!=='completed') throw new Error('First response missing');
     await panel.webContents.executeJavaScript(`(async()=>{
@@ -17,7 +17,7 @@ module.exports = async ({app,panel,store,codex}) => {
     let lockedRejected=false;
     try { await panel.webContents.executeJavaScript(`window.onggi.action('open-conversation',{id:${JSON.stringify(first)}})`); }
     catch(error) { lockedRejected=error.message.includes('진행 중인'); }
-    for (let i=0;i<100 && store.data.messages.at(-1)?.status!=='completed';i++) await new Promise(r=>setTimeout(r,50));
+    for (let i=0;i<100 && (store.data.messages.at(-1)?.status!=='completed'||store.saving||await panel.webContents.executeJavaScript(`document.querySelector('#new-chat').disabled`));i++) await new Promise(r=>setTimeout(r,50));
     const second = store.data.activeConversationId, secondThread = store.data.threadId;
     if (first===second || firstThread===secondThread || !lockedRejected) throw new Error('Conversation isolation or busy lock failed');
     const result = await panel.webContents.executeJavaScript(`(async()=>{
@@ -30,7 +30,11 @@ module.exports = async ({app,panel,store,codex}) => {
       search.value='';search.dispatchEvent(new Event('input'));
       let foreignRejected=false;
       try{await window.onggi.action('open-conversation',{id:'foreign-codex-thread'});}catch(e){foreignRejected=e.message.includes('옹기봇에서 만든');}
-      document.querySelector('[data-conversation="${first}"]').click();
+      deadline=Date.now()+5000;
+      while(Date.now()<deadline&&!document.querySelector('[data-conversation="${first}"]'))await new Promise(r=>setTimeout(r,25));
+      const card=document.querySelector('[data-conversation="${first}"]');
+      if(!card)throw Error('Owned history card is missing '+JSON.stringify({first:'${first}',count,filtered,query:search.value,ids:[...document.querySelectorAll('.conversation-card')].map(c=>c.dataset.conversation),hidden:document.hidden}));
+      card.click();
       deadline=Date.now()+5000;
       while(Date.now()<deadline&&(document.querySelector('#chat-tab').hidden||!document.querySelector('#messages').textContent.includes('첫 번째 옹기 이야기')))await new Promise(r=>setTimeout(r,50));
       const restored=document.querySelector('#messages').textContent.includes('첫 번째 옹기 이야기')&&!document.querySelector('#messages').textContent.includes('두 번째 별개의 이야기');
@@ -43,6 +47,7 @@ module.exports = async ({app,panel,store,codex}) => {
     if(result.count!==2 || result.filtered.join()!==first || !result.foreignRejected || !result.restored || store.data.threadId!==firstThread || store.data.messages.length!==4 || store.data.messages.at(-1)?.status!=='completed') throw new Error('History UI or thread resume failed: '+JSON.stringify(result));
     const remote = await codex.request('thread/read',{threadId:firstThread,includeTurns:true});
     if(remote.thread.turns.length!==2 || remote.thread.threadSource!=='onggi_bot')throw new Error('Wrong thread resumed');
+    for(let i=0;i<100&&(store.saving||await panel.webContents.executeJavaScript(`document.querySelector('#new-chat').disabled`));i++)await new Promise(r=>setTimeout(r,50));
     const reloaded = new Store(store.directory,store.data.settings);
     if(reloaded.data.conversations.length!==2 || reloaded.data.threadId!==firstThread || reloaded.data.messages.length!==4)throw new Error('Restart persistence failed');
     reloaded.openConversation(second);

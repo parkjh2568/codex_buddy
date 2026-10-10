@@ -4,5 +4,6 @@ contextBridge.exposeInMainWorld('onggi', {
   onState: callback => { ipcRenderer.on('state', (_event, state) => callback(state)); },
   onTab: callback => { ipcRenderer.on('show-tab', (_event, tab) => callback(tab)); },
   onPetPointer: callback => { ipcRenderer.on('pet-pointer', (_event, pointer) => callback(pointer)); },
-  onPetLayoutChanged: callback => { ipcRenderer.on('pet-layout-changed', () => callback()); }
+  onPetLayoutChanged: callback => { ipcRenderer.on('pet-layout-changed', () => callback()); },
+  onBubblePlacement: callback => { ipcRenderer.on('bubble-placement', (_event,position) => callback(position)); }
 });

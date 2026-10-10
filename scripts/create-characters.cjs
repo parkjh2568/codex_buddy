@@ -42,6 +42,13 @@ for (const [id, name, description, motion] of [
     fs.writeFileSync(path.join(directory, state + '.svg'), `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 180 250" role="img" aria-label="${name}">${art}</svg>`);
     states[state] = state + '.svg';
   }
-  fs.writeFileSync(path.join(directory, 'manifest.json'), JSON.stringify({ schemaVersion: 1, id, name, description, version: '1.0.0', size: { width: 150, height: 190 }, bubbleAnchor: { x: .65, y: .12 }, motion, states }, null, 2));
+  const personaConfig=fs.existsSync(path.join(directory,'manifest.json'))?JSON.parse(fs.readFileSync(path.join(directory,'manifest.json'),'utf8')).personas:undefined;
+  fs.writeFileSync(path.join(directory, 'manifest.json'), JSON.stringify({ schemaVersion: 1, id, name, description, version: '1.0.0', size: { width: 150, height: 190 }, bubbleAnchor: { x: .65, y: .12 }, motion, states, ...(personaConfig?{personas:personaConfig}:{}) }, null, 2));
 }
-console.log('Generated two character packs, seven states each.');
+const clipDirectory=path.join(__dirname,'..','characters','onggi-clip'),blinkDirectory=path.join(__dirname,'..','characters','onggi-clip-blink');
+fs.cpSync(clipDirectory,blinkDirectory,{recursive:true});
+for(const file of fs.readdirSync(blinkDirectory).filter(file=>file.endsWith('.svg'))){const target=path.join(blinkDirectory,file);fs.writeFileSync(target,fs.readFileSync(target,'utf8').replace('<svg xmlns=','<svg width="180" height="250" xmlns='));}
+const blink=JSON.parse(fs.readFileSync(path.join(blinkDirectory,'manifest.json'),'utf8'));
+Object.assign(blink,{schemaVersion:2,id:'onggi-clip-blink',name:'옹기 클립 · 눈 깜빡임',description:'생동감 프로필에서 가끔 눈을 깜빡이는 친구',author:'OnggiBot',source:'Built-in SVG character',license:'Project character assets',animation:{canvas:{width:180,height:250},pivot:{x:.5,y:1},rendering:'smooth',blink:{loop:true,frames:[{file:'idle.svg',durationMs:4000},{file:'sleeping.svg',durationMs:120},{file:'idle.svg',durationMs:120}]}}});
+fs.writeFileSync(path.join(blinkDirectory,'manifest.json'),JSON.stringify(blink,null,2)+'\n');
+console.log('Generated two v1 packs and one v2 blink pack, seven states each.');

@@ -1,0 +1,16 @@
+{
+  "id": "paper",
+  "name": "종이와 올리브",
+  "colors": {
+    "cream": "#faf9f4",
+    "text": "#303a32",
+    "muted": "#656f62",
+    "line": "#e3e6dc",
+    "surface": "#fffefa",
+    "wash": "#eaf0e1",
+    "green": "#48644c",
+    "accentInk": "#ffffff",
+    "field": "#fffefa",
+    "danger": "#985f43"
+  }
+}

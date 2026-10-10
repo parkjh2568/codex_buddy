@@ -3,20 +3,35 @@ import DOMPurify from 'dompurify';
 import cjkFriendly from 'markdown-it-cjk-friendly';
 
 const surface = new URLSearchParams(location.search).get('surface');
+document.body.dataset.surface=surface;
 document.querySelector(surface === 'pet' ? '#pet-surface' : '#panel-surface').hidden = false;
-let state, catalog = [], lastRequestSignature = '', toastTimer, drag, replyingTimer, lastState = '', activeTab = 'chat', lastListening = false, modelSignature = '', modelSaving = false;
+let state, catalog = [], lastRequestSignature = '', toastTimer, drag, lastWarning = '', activeTab = 'chat', lastListening = false, modelSignature = '', modelSaving = false, pickerSettingsSignature = '';
 let historySignature = '';
 let deletionTarget=null,deleting=false;
-let pickerSettingsSignature = '';
-let bubbleState, bubbleTimer;
+let buddyNameSignature='';
+let activeCharacter=null;
+let characterCatalogDirty=false,submitting=false,createdConversationId=null;
+let animationTimer,animationRun=null,animationReady=null,animationLoading=null,animationFailed=null,decodedFrames=[];
+const failedImages=new Map(),osReducedMotion=matchMedia('(prefers-reduced-motion: reduce)');
+let skinCatalog=[],personaCatalog=[],skinSignature='',personaSignature='',editorSignature='',appearanceCatalogVersion=0;
+let bubbleState, bubbleTimer, controlsTimer, petPointerInsideCharacter = false, petHovering = false;
 let petLayoutSignature = '';
-const drafts = new Map();
+const drafts = new Map(),editorDrafts=new Map();
+const attachmentDrafts=new Map();let pickingAttachments=false;
+let packPreviewUi=null,packOperation=false,packRemoveTarget=null,packManagementSignature='';
 const renderAckIds = new Set();
 const messageCache=new Map(),messageCards=new Map();
+const responseImageObserver=surface==='panel'?new IntersectionObserver(entries=>{
+  if(document.hidden||state?.panelVisible===false)return;
+  for(const entry of entries){
+    if(!entry.isIntersecting)continue;
+    const image=entry.target;responseImageObserver.unobserve(image);
+    void window.onggi.action(image.dataset.attachmentId?'attachment-preview':'response-image',image.dataset.attachmentId?{messageId:image.dataset.messageId,id:image.dataset.attachmentId}:{messageId:image.dataset.messageId,imageId:image.dataset.imageId}).then(result=>{if(!image.isConnected)return;if(result.ok&&typeof result.source==='string'&&result.source.startsWith('data:image/png;base64,'))image.src=result.source;else{image.dataset.failed='true';image.closest('figure').querySelector('figcaption span').textContent='미리보기를 읽지 못했어요. 원본을 열거나 대화를 다시 열어주세요.';acknowledgeRenderedMessages();}}).catch(()=>{if(image.isConnected){image.dataset.failed='true';image.closest('figure').querySelector('figcaption span').textContent='미리보기를 읽지 못했어요. 원본을 열거나 대화를 다시 열어주세요.';acknowledgeRenderedMessages();}});
+  }
+},{root:document.querySelector('#messages'),rootMargin:'160px'}):null;
 const markdown = new MarkdownIt({ html: false, linkify: true, breaks: false, typographer: false }).use(cjkFriendly);
 markdown.disable('image');
 markdown.validateLink = value => { try { return ['http:','https:'].includes(new URL(value).protocol); } catch { return false; } };
-const labels = { idle: '말 걸어주세요', listening: '듣고 있어요', thinking: '생각 중이에요…', replying: '답변이 도착했어요', attention: '확인이 필요해요', error: '잠깐 막혔어요', sleeping: '잠시 쉬는 중…' };
 
 async function act(action, payload) {
   try { return await window.onggi.action(action, payload); }
@@ -29,23 +44,48 @@ async function act(action, payload) {
 }
 
 function showTab(tab) {
+  const menu=document.querySelector('#model-popover');if(menu.matches(':popover-open'))menu.hidePopover();
   activeTab = ['chat','history','settings'].includes(tab) ? tab : 'chat';
   document.querySelector('#chat-tab').hidden = activeTab !== 'chat';
   document.querySelector('#history-tab').hidden = activeTab !== 'history';
   document.querySelector('#settings-tab').hidden = activeTab !== 'settings';
-  for (const button of document.querySelectorAll('[data-tab]')) button.classList.toggle('active', button.dataset.tab === activeTab);
+  for (const button of document.querySelectorAll('[data-tab]')) {
+    button.classList.toggle('active', button.dataset.tab === activeTab);
+    if(button.closest('.tabs')){if(button.dataset.tab===activeTab)button.setAttribute('aria-current','page');else button.removeAttribute('aria-current');}
+  }
   document.querySelector('#open-settings').setAttribute('aria-pressed',String(activeTab === 'settings'));
+  document.body.classList.toggle('compact-mode',surface==='panel'&&Boolean(state?.compactMode)&&activeTab==='chat');
+  if(surface==='panel'&&state?.compactMode&&activeTab!=='chat')void act('show-panel',{tab:activeTab});
   if (activeTab === 'chat' && surface === 'panel') document.querySelector('#prompt').focus({ preventScroll: true });
+  if (activeTab === 'history') renderHistory();
   acknowledgeRenderedMessages();
 }
 
+function renderDraftAttachments(){
+  const root=document.querySelector('#draft-attachments'),items=attachmentDrafts.get(state?.activeConversationId??'new')??[],locked=submitting||pickingAttachments||state?.attachmentPicking||state?.historyLoading;
+  document.querySelector('#send').disabled=Boolean(locked||state?.preparing>0);
+  for(const id of ['attach-image','attach-file'])document.querySelector('#'+id).disabled=Boolean(locked);
+  root.hidden=!items.length;
+  const signature=JSON.stringify([items,Boolean(locked)]);if(root.dataset.signature===signature)return;root.dataset.signature=signature;root.replaceChildren();
+  for(const attachment of items){
+    const chip=document.createElement('div');chip.className='attachment-chip';
+    if(attachment.kind==='image'){const image=document.createElement('img');image.alt=attachment.name;chip.append(image);void act('attachment-preview',{id:attachment.id}).then(result=>{if(image.isConnected&&result.ok)image.src=result.source;});}
+    const label=document.createElement('span');label.textContent=attachment.name;label.title=attachment.name+' · '+Math.ceil(attachment.bytes/1024)+'KiB';chip.append(label);
+    const remove=document.createElement('button');remove.type='button';remove.textContent='×';remove.disabled=Boolean(locked);remove.setAttribute('aria-label',attachment.name+' 첨부 제거');
+    remove.addEventListener('click',async()=>{if((await act('discard-attachment',{id:attachment.id})).ok){const key=state?.activeConversationId??'new';attachmentDrafts.set(key,(attachmentDrafts.get(key)??[]).filter(a=>a.id!==attachment.id));renderDraftAttachments();}});chip.append(remove);root.append(chip);
+  }
+}
+
 function acknowledgeRenderedMessages() {
-  if (surface !== 'panel' || !state || activeTab !== 'chat' || document.hidden) return;
+  if (surface !== 'panel' || !state || activeTab !== 'chat' || document.hidden || state.panelVisible === false) return;
   for (const message of state.messages) {
+    if (!messageCards.get(message.id)?.getClientRects().length) continue;
     if (message.role !== 'assistant' || !message.timing?.completedAt || message.timing.renderedAt !== undefined || renderAckIds.has(message.id)) continue;
+    if(message.images?.some(i=>i.status==='pending'))continue;
+    const preview=messageCards.get(message.id)?.querySelector('.generated-image');if(preview&&!preview.dataset.failed&&!(preview.complete&&preview.naturalWidth>0))continue;
     renderAckIds.add(message.id);
     requestAnimationFrame(()=>requestAnimationFrame(async()=>{
-      if (document.hidden || activeTab !== 'chat' || !state.messages.some(m=>m.id===message.id)) {renderAckIds.delete(message.id);return;}
+      if (document.hidden || state.panelVisible === false || activeTab !== 'chat' || !state.messages.some(m=>m.id===message.id) || !messageCards.get(message.id)?.getClientRects().length) {renderAckIds.delete(message.id);return;}
       const result = await act('response-rendered',{id:message.id,renderedAt:performance.timeOrigin + performance.now()});
       if (!result.ok) renderAckIds.delete(message.id);
     }));
@@ -53,10 +93,10 @@ function acknowledgeRenderedMessages() {
 }
 
 function renderHistory() {
-  if (!state || surface !== 'panel') return;
+  if (!state || surface !== 'panel' || activeTab !== 'history' || document.hidden || state.panelVisible === false) return;
   const query = document.querySelector('#history-search').value.trim().toLocaleLowerCase();
-  const locked = state.busy || state.queue.length > 0 || state.preparing > 0 || state.historyLoading;
-  const signature = JSON.stringify([state.conversations,state.activeConversationId,locked,query,state.pendingDeletionId]);
+  const locked = state.busy || state.queue.length > 0 || state.preparing > 0 || state.historyLoading || state.attachmentPicking;
+  const signature = JSON.stringify([state.conversationRevision,state.activeConversationId,locked,query,state.pendingDeletionId]);
   if (signature === historySignature) return;
   historySignature = signature;
   const list = document.querySelector('#conversation-list'); list.replaceChildren();
@@ -92,46 +132,69 @@ function renderHistory() {
 }
 
 function renderCharacter(characterState) {
-  const pack = catalog.find(p => p.id === state?.settings.characterId) ?? catalog[0];
+  const pack = activeCharacter?.id===state?.settings.characterId?activeCharacter:null;
   if (!pack) return;
   const image = document.querySelector('#pet-image'), character = document.querySelector('#pet-character');
   const source = pack.assets[characterState] ?? pack.assets.idle;
-  if (image.getAttribute('src') !== source) image.src = source;
-  image.alt = pack.name; character.dataset.state = characterState;
+  const failed=failedImages.get(pack.revision);
+  if(!animationRun&&image.getAttribute('src')!==source&&!failed?.has(source))image.src=source;
+  image.alt = `${state.settings.buddyName} · ${pack.name}`; character.dataset.state = characterState;
   const characterClass = `pet-character motion-${pack.motion}`;
   if (character.className !== characterClass) character.className = characterClass;
-  character.style.width = `${pack.size.width / 2}px`; character.style.height = `${pack.size.height / 2}px`; character.style.marginLeft = `${-pack.size.width / 4}px`;
+  character.style.width = `${pack.size.width * (state.settings.characterScale??.5)}px`; character.style.height = `${pack.size.height * (state.settings.characterScale??.5)}px`; character.style.marginLeft = `${-pack.size.width * (state.settings.characterScale??.5) / 2}px`;
+  character.style.transformOrigin=pack.animation?`${pack.animation.pivot.x*100}% ${pack.animation.pivot.y*100}%`:'';
+  image.style.imageRendering=pack.animation?.rendering==='pixel'?'pixelated':'auto';
   const bubble = document.querySelector('#pet-bubble');
-  bubble.firstChild.textContent = labels[characterState] + ' ';
-  bubble.style.setProperty('--tail', `${20 + pack.bubbleAnchor.x * 60}%`);
-  if (surface === 'pet' && characterState !== bubbleState) {
-    bubbleState = characterState; clearTimeout(bubbleTimer);
-    bubble.hidden = characterState === 'sleeping';
-    if (!['thinking','attention','sleeping'].includes(characterState)) bubbleTimer = setTimeout(() => {
+  if (surface === 'pet' && `${characterState}:${state.settings.appearanceProfile??'custom'}` !== bubbleState) {
+    bubbleState = `${characterState}:${state.settings.appearanceProfile??'custom'}`; clearTimeout(bubbleTimer);
+    bubble.hidden = characterState === 'sleeping' || (['quiet','daily'].includes(state.settings.appearanceProfile)&&['idle','listening'].includes(characterState));
+    if (!['thinking','attention','sleeping'].includes(characterState) && !(characterState === 'idle' && petHovering)) bubbleTimer = setTimeout(() => {
       bubble.hidden = true;
       void syncPetLayout();
     }, characterState === 'idle' || characterState === 'listening' ? 3000 : 5000);
   }
   if (surface === 'pet' && drag) bubble.hidden = true;
   const welcome = document.querySelector('#welcome-image');
-  if (welcome.getAttribute('src') !== pack.assets.idle) welcome.src = pack.assets.idle;
+  if (welcome.getAttribute('src') !== pack.assets.idle && !failed?.has(pack.assets.idle))welcome.src=pack.assets.idle;
+  syncAnimation(characterState);
   if (surface === 'pet') void syncPetLayout();
 }
+
+function syncAnimation(characterState=state?.characterState){
+  const pack=activeCharacter,image=document.querySelector('#pet-image');
+  if(animationRun&&animationRun!==pack?.revision){clearTimeout(animationTimer);animationRun=null;image.src=pack.assets[characterState]??pack.assets.idle;}
+  const eligible=surface==='pet'&&pack?.animation&&pack.id===state?.settings.characterId&&characterState==='idle'&&state.settings.appearanceProfile==='lively'&&!state.motionReduced&&state.petVisible!==false&&!document.hidden&&!drag&&!osReducedMotion.matches&&animationFailed!==pack.revision;
+  if(!eligible){clearTimeout(animationTimer);animationRun=null;image.dataset.animating='false';if(pack&&image.getAttribute('src')!==pack.assets[characterState]&&!failedImages.get(pack.revision)?.has(pack.assets[characterState]))image.src=pack.assets[characterState]??pack.assets.idle;return;}
+  if(animationReady!==pack.revision){
+    if(animationLoading===pack.revision)return;
+    animationLoading=pack.revision;const frames=pack.animationFrames.map(source=>{const frame=new Image();frame.src=source;return frame;});
+    Promise.all(frames.map(frame=>frame.decode())).then(()=>{if(activeCharacter?.revision!==pack.revision)return;decodedFrames=frames;animationReady=pack.revision;animationLoading=null;syncAnimation();}).catch(()=>{if(activeCharacter?.revision!==pack.revision)return;animationFailed=pack.revision;animationLoading=null;decodedFrames=[];syncAnimation();});return;
+  }
+  if(animationRun===pack.revision)return;
+  clearTimeout(animationTimer);animationRun=pack.revision;image.dataset.animating='true';
+  let index=0;
+  const advance=()=>{
+    if(animationRun!==pack.revision)return;
+    image.src=decodedFrames[index].src;image.dataset.frameIndex=String(index);image.dataset.frameChanges=String(Number(image.dataset.frameChanges??0)+1);
+    const duration=pack.animation.blink.frames[index].durationMs;
+    index++;if(index===decodedFrames.length){if(!pack.animation.blink.loop){animationTimer=setTimeout(()=>{animationFailed=pack.revision;syncAnimation();},duration);return;}index=0;}
+    animationTimer=setTimeout(advance,duration);
+  };
+  advance();
+}
+osReducedMotion.addEventListener('change',()=>syncAnimation());
 
 async function syncPetLayout() {
   if (surface !== 'pet' || !state || !catalog.length) return;
   const bubble = document.querySelector('#pet-bubble'), root = document.querySelector('#pet-surface');
-  const payload = {bubbleVisible:!bubble.hidden,controlsVisible:root.classList.contains('pet-active') || root.matches(':focus-within')};
-  const signature = JSON.stringify([state.settings.characterId,payload]);
+  const payload = {bubbleVisible:!bubble.hidden,controlsVisible:root.classList.contains('pet-active')};
+  const signature = JSON.stringify([state.settings.characterId,state.settings.characterScale,payload]);
   if (signature === petLayoutSignature) return;
   petLayoutSignature = signature;
   const result = await act('pet-layout',payload);
   if (signature !== petLayoutSignature) return;
   if (!result.ok) { petLayoutSignature = ''; return; }
   root.style.setProperty('--pet-center',`${result.centerX}px`); root.style.setProperty('--pet-bottom',`${result.bottom}px`);
-  const pack = catalog.find(p => p.id === state.settings.characterId) ?? catalog[0];
-  const characterBottom = result.bounds.height - result.bottom, characterTop = characterBottom - pack.size.height / 2;
-  bubble.style.top = `${Math.min(result.bounds.height - 44,Math.max(8,characterTop < 48 ? characterBottom + 39 : characterTop + pack.bubbleAnchor.y * pack.size.height / 2 - 44))}px`;
 }
 
 window.onggi.onPetLayoutChanged(() => {
@@ -139,10 +202,18 @@ window.onggi.onPetLayoutChanged(() => {
   drag = null; document.querySelector('#pet-surface').classList.remove('pet-dragging');
   petLayoutSignature = ''; void syncPetLayout();
 });
+window.onggi.onBubblePlacement(position=>{if(surface==='panel'){document.body.classList.toggle('bubble-below',position.below);document.body.style.setProperty('--bubble-tail',position.tailX+'px');}});
 
 window.onggi.onState(next => {
+  const compactChanged=Boolean(state?.compactMode)!==Boolean(next.compactMode);
+  if(next.characterPack){if(activeCharacter?.revision!==next.characterPack.revision){clearTimeout(animationTimer);animationRun=null;animationReady=null;animationLoading=null;animationFailed=null;decodedFrames=[];failedImages.clear();}activeCharacter=next.characterPack;}
+  if(next.packs){catalog=next.packs;characterCatalogDirty=true;}
+  if(next.skins)skinCatalog=next.skins;
+  if(next.personas)personaCatalog=next.personas;
+  if(next.skins||next.personas)appearanceCatalogVersion++;
   const previousMessages=state?.messages??[];
   if (surface==='panel') {
+    next.conversations ??= state?.conversations ?? [];
     if (next.messagePatch?.reset) messageCache.clear();
     for (const message of next.messagePatch?.upsert??[]) messageCache.set(message.id,message);
     const ids=next.messagePatch?.ids??previousMessages.map(m=>m.id),keep=new Set(ids);
@@ -150,26 +221,55 @@ window.onggi.onState(next => {
     next.messages=ids.map(id=>messageCache.get(id)).filter(Boolean);
   }
   const prepended=previousMessages.length>0&&next.messages?.length>previousMessages.length&&next.messages.at(-1)?.id===previousMessages.at(-1)?.id&&next.messages.some(m=>m.id===previousMessages[0].id);
-  const wasBusy = state?.busy;
   const changedConversation = state && state.activeConversationId !== next.activeConversationId;
+  const panelRestored=state?.panelVisible===false&&next.panelVisible!==false;
   if (changedConversation || next.messagePatch?.reset) renderAckIds.clear();
-  if (changedConversation && surface === 'panel') { if(state.activeConversationId===null||next.conversations.some(c=>c.id===state.activeConversationId))drafts.set(state.activeConversationId ?? 'new',document.querySelector('#prompt').value);else drafts.delete(state.activeConversationId);document.querySelector('#prompt').value = drafts.get(next.activeConversationId ?? 'new') ?? ''; }
+  if (changedConversation && surface === 'panel') {
+    const input=document.querySelector('#prompt');
+    if(state.activeConversationId===null||next.conversations.some(c=>c.id===state.activeConversationId))drafts.set(state.activeConversationId ?? 'new',input.value);else drafts.delete(state.activeConversationId);
+    if(state.activeConversationId===null&&next.activeConversationId&&(submitting||createdConversationId===next.activeConversationId)){
+      drafts.set(next.activeConversationId,input.value);drafts.delete('new');
+      attachmentDrafts.set(next.activeConversationId,attachmentDrafts.get('new')??[]);attachmentDrafts.delete('new');
+    }
+    createdConversationId=null;
+    input.value=drafts.get(next.activeConversationId ?? 'new') ?? '';input.style.height='auto';
+    input.style.height=Math.min(parseFloat(getComputedStyle(input).maxHeight),Math.max(parseFloat(getComputedStyle(input).minHeight),input.scrollHeight))+'px';
+  }
   state = next;
-  document.body.classList.toggle('reduced-motion', state.settings.reducedMotion);
+  if (surface === 'panel') document.body.classList.toggle('page-hidden',document.hidden || state.panelVisible === false);
+  if (surface === 'panel' && (document.hidden || state.panelVisible === false)) return;
+  document.body.classList.toggle('compact-mode',surface==='panel'&&Boolean(state.compactMode)&&activeTab==='chat');
+  document.body.classList.toggle('bubble-below',Boolean(state.bubbleBelow));document.body.style.setProperty('--bubble-tail',state.bubbleTailX+'px');
+  const skin=skinCatalog.find(s=>s.id===state.settings.skinId),skinKey=state.settings.skinId+':'+appearanceCatalogVersion;
+  if(skin&&skinKey!==skinSignature){skinSignature=skinKey;for(const [key,color]of Object.entries(skin.colors))document.body.style.setProperty('--'+key,color);document.body.dataset.skin=skin.id;}
+  if(compactChanged){const input=document.querySelector('#prompt');input.style.height='auto';input.style.height=Math.min(parseFloat(getComputedStyle(input).maxHeight),Math.max(parseFloat(getComputedStyle(input).minHeight),input.scrollHeight))+'px';}
+  const buddyName=state.settings.buddyName||'옹기봇';
+  if(buddyName!==buddyNameSignature){
+    buddyNameSignature=buddyName;
+    document.title=buddyName==='옹기봇'?buddyName:`${buddyName} · 옹기봇`;
+    document.querySelector('#buddy-title').textContent=buddyName;document.querySelector('#buddy-title').title=buddyName;
+    document.querySelector('#mini-buddy-title').textContent=buddyName;
+    document.querySelector('#buddy-name').value=buddyName;
+    document.querySelector('#prompt').placeholder=`${buddyName}에게 말 걸기…`;
+    document.querySelector('#pet-character').setAttribute('aria-label',`${buddyName}: 클릭하면 대화, 드래그하면 이동`);
+    document.querySelector('#welcome-image').alt=`반기는 ${buddyName}`;
+    document.querySelector('#history-description').textContent=`${buddyName}과 나눈 대화만 모았어요.`;
+    document.querySelector('#conversation-list').setAttribute('aria-label',`${buddyName} 이전 대화 목록`);
+  }
+  document.body.classList.toggle('reduced-motion', Boolean(state.motionReduced??state.settings.reducedMotion));
+  document.querySelector('#appearance-profile').value=state.settings.appearanceProfile??'custom';
+  document.querySelector('#battery-saver').checked=Boolean(state.settings.batterySaver);
+  document.querySelector('#character-scale').value=String(state.settings.characterScale??.5);
   let characterState = state.characterState;
   if (surface === 'panel' && document.activeElement === document.querySelector('#prompt') && document.querySelector('#prompt').value && !state.busy && !state.sleeping) characterState = 'listening';
-  if (wasBusy && !state.busy && state.lastMessageStatus === 'completed') {
-    characterState = 'replying'; clearTimeout(replyingTimer); replyingTimer = setTimeout(() => renderCharacter(state.characterState), 3500);
-  }
   renderCharacter(characterState);
-  if (state.packs) {
-    catalog = state.packs;
-    renderCharacter(characterState);
+  if (characterCatalogDirty) {
+    characterCatalogDirty=false;
     if (surface === 'panel') {
     const cards = document.querySelector('#character-cards'); cards.replaceChildren();
     for (const pack of catalog) {
-      const card = document.createElement('button'); card.className = 'character-card'; card.dataset.character = pack.id;
-      const image = document.createElement('img'); image.src = pack.assets.idle; image.alt = pack.name;
+      const card = document.createElement('button'); card.className = 'character-card'; card.dataset.character = pack.id;card.disabled=Boolean(pack.temporary);
+      const image = document.createElement('img'); image.src = pack.thumbnail??''; image.alt = pack.name;
       const name = document.createElement('strong'); name.textContent = pack.name;
       const description = document.createElement('small'); description.textContent = pack.description;
       const check = document.createElement('span'); check.className = 'check'; check.textContent = '✓';
@@ -182,14 +282,49 @@ window.onggi.onState(next => {
     card.querySelector('.check').hidden = card.dataset.character !== state.settings.characterId;
   }
   if (surface === 'pet') return;
+  document.querySelector('#mini-connection').textContent=state.connection==='demo'?'체험':state.connection==='connected'?'Codex':'연결 대기';
+  document.querySelector('#mini-welcome').hidden=!state.compactMode||state.messages.length>0;
+  const preferences=JSON.stringify([appearanceCatalogVersion,state.settings.characterId,state.settings.personaModes]);
+  if(preferences!==personaSignature){
+    personaSignature=preferences;
+    const skinSelect=document.querySelector('#skin-select');skinSelect.replaceChildren();for(const entry of skinCatalog){const option=document.createElement('option');option.value=entry.id;option.textContent=entry.name;skinSelect.append(option);}
+    const selected=personaCatalog.find(p=>p.characterId===state.settings.characterId),selector=document.querySelector('#persona-select');selector.replaceChildren();
+    for(const entry of selected?.entries.filter(e=>e.id!=='base'&&!e.archived&&!e.error)??[]){const option=document.createElement('option');option.value=entry.id;option.textContent=entry.name;option.title=entry.description;selector.append(option);}
+    selector.disabled=!selected;selector.value=state.settings.personaModes?.[state.settings.characterId]??'';document.querySelector('.persona-quick').hidden=!selected;
+    const characterSelect=document.querySelector('#persona-character'),previous=characterSelect.value;characterSelect.replaceChildren();
+    for(const entry of personaCatalog){const option=document.createElement('option');option.value=entry.characterId;option.textContent=catalog.find(p=>p.id===entry.characterId)?.name??entry.characterId;characterSelect.append(option);}
+    characterSelect.value=personaCatalog.some(p=>p.characterId===previous)?previous:state.settings.characterId;
+    characterSelect.dispatchEvent(new Event('change'));
+  }
+  const packSignature=JSON.stringify([catalog.map(p=>[p.id,p.version,p.revision]),state.packArchives]);
+  if(packSignature!==packManagementSignature){
+    packManagementSignature=packSignature;const select=document.querySelector('#pack-manage-select'),old=select.value;select.replaceChildren();
+    for(const entry of catalog){const option=document.createElement('option');option.value=entry.id;option.textContent=entry.name;select.append(option);}select.value=catalog.some(p=>p.id===old)?old:state.settings.characterId;select.dispatchEvent(new Event('change'));
+    const archives=document.querySelector('#pack-archive-select');archives.replaceChildren();for(const entry of state.packArchives??[]){const option=document.createElement('option');option.value=entry.token;option.textContent=entry.name+' · '+entry.version;archives.append(option);}document.querySelector('#pack-restore').disabled=!archives.options.length;
+  }
+  document.querySelector('#skin-select').value=state.settings.skinId;document.querySelector('#chat-mode').value=state.settings.chatMode;
   const connectionLabels = { disconnected: 'Codex · 연결 대기', connecting: 'Codex · 연결 중', connected: 'Codex · 연결됨', demo: '체험 모드' };
   document.querySelector('#connection-label').lastChild.textContent = connectionLabels[state.connection] ?? '연결 대기';
   document.querySelector('.connection-bar').dataset.connection = state.connection;
+  const help=state.connectionHelp??{phase:state.connection==='connected'?'ready':'idle',message:'연결을 확인해주세요.'},demo=state.connection==='demo',pending=help.phase==='login-pending';
+  const checking=help.phase==='checking'||state.modelsStatus==='loading',connectionLocked=state.busy||state.preparing>0||state.historyLoading||state.queue.length&&!state.queuePaused;
+  document.querySelector('#connection-help').hidden=demo||help.phase==='ready'&&state.connection==='connected';
+  document.querySelector('#connection-help-title').textContent=({checking:'연결을 확인하고 있어요',ready:'연결을 다시 확인해요','login-required':'ChatGPT 로그인이 필요해요','login-pending':'브라우저에서 로그인해주세요','missing-cli':'Codex를 찾지 못했어요','workspace-missing':'작업 폴더를 선택해주세요',error:'연결을 복구해요'})[help.phase]??'대화 연결을 준비해요';
+  document.querySelector('#connection-help-message').textContent=help.message??'다시 연결을 누르면 설치와 로그인 상태를 확인해요.';
+  for(const id of ['reconnect','connection-retry','check-connection'])document.querySelector('#'+id).disabled=demo||checking||pending||connectionLocked;
+  document.querySelector('#reconnect').hidden=demo||help.phase==='ready'&&state.connection==='connected';
+  document.querySelector('#refresh-conversation').hidden=demo||!state.activeConversationId;document.querySelector('#refresh-conversation').disabled=connectionLocked||checking||pending;
+  document.querySelector('#connection-retry').hidden=pending||help.phase==='login-required';
+  document.querySelector('#login-chatgpt').hidden=help.phase!=='login-required';document.querySelector('#login-chatgpt').disabled=connectionLocked||checking;
+  document.querySelector('#find-cli').hidden=help.phase!=='missing-cli'&&help.phase!=='error';document.querySelector('#find-cli').disabled=connectionLocked||checking;
+  document.querySelector('#install-cli').hidden=help.phase!=='missing-cli';document.querySelector('#connection-workspace').hidden=help.phase!=='workspace-missing';document.querySelector('#connection-workspace').disabled=connectionLocked||checking;
+  document.querySelector('#cancel-login').hidden=!pending;
+  if(help.phase==='login-required')document.querySelector('#connection-label').lastChild.textContent='Codex · 로그인 필요';
   document.querySelector('#connection-label').title = state.connection === 'demo' ? '체험 응답 · 실제 Codex 호출 없음' : '로컬 Codex · 읽기 전용으로 시작';
   document.querySelector('#stop').hidden = !state.busy;
   document.querySelector('#new-chat').disabled = state.busy || state.queue.length > 0 || state.historyLoading || state.preparing > 0;
   document.querySelector('#prompt').disabled = state.historyLoading;
-  document.querySelector('#send').disabled = state.historyLoading || state.preparing > 0;
+  document.querySelector('#send').title=state.busy?'대기열에 추가 · 앞 작업이 끝나면 차례대로 실행':'Enter 보내기 · Shift+Enter 줄바꿈';document.querySelector('#send').setAttribute('aria-label',state.busy?'대기열에 질문 추가':'질문 보내기');renderDraftAttachments();
   document.querySelector('#history-warning').textContent = state.historyWarning ?? '';
   document.querySelector('#history-warning').hidden = !state.historyWarning;
   renderHistory();
@@ -228,6 +363,11 @@ window.onggi.onState(next => {
   modelInfo.textContent = state.connection === 'demo' ? '체험 모드에서는 모델을 호출하지 않아요' : state.modelsError ? `모델 조회 실패 · ${state.modelsError}` : state.modelsStatus === 'loading' ? '모델 목록 확인 중…' : model ? `다음 질문 · ${model.name} / ${effectiveEffort} · ${serviceTier === 'default' ? 'Standard' : `${speed?.name ?? '미지원 속도'} · 사용량 증가`}${state.busy || state.queue.length ? ' · 기존 요청은 유지' : ''}` : '모델 목록을 새로고침해주세요';
   modelInfo.hidden = state.connection === 'demo' || (!state.modelsError && state.modelsStatus !== 'loading' && Boolean(model));
   document.querySelector('.model-controls').title = modelInfo.textContent;
+  const modelToggle=document.querySelector('#model-menu-toggle');
+  document.querySelector('#model-menu-label').textContent=state.connection==='demo'?'체험 모드':model?.name??chosenModel??'모델 선택';
+  document.querySelector('#model-menu-effort').textContent=state.connection==='demo'?'':effectiveEffort??'';
+  document.querySelector('#model-fast-icon').hidden=serviceTier==='default';
+  modelToggle.disabled=state.connection==='demo';modelToggle.title=modelInfo.textContent;modelToggle.setAttribute('aria-label','모델 설정 열기 · '+modelInfo.textContent);
   modelInfo.classList.toggle('model-error', Boolean(state.modelsError));
   document.querySelector('#reduced-motion').checked = state.settings.reducedMotion;
   document.querySelector('#always-on-top').checked = state.settings.alwaysOnTop;
@@ -239,29 +379,35 @@ window.onggi.onState(next => {
   const atBottom = previousHeight - previousTop - messages.clientHeight < 90;
   const older=document.querySelector('#load-older');older.hidden=state.messages.length>=state.messageTotal;older.disabled=false;older.textContent=`이전 내용 더 보기 · ${Math.max(0,state.messageTotal-state.messages.length)}개 남음`;
   document.querySelector('#welcome').hidden = state.messages.length > 0;
-  const ids = new Set(state.messages.map(m => m.id));
-  for (const [id,element] of messageCards) if (!ids.has(id)) {element.remove();messageCards.delete(id);}
+  const renderedMessages = state.compactMode ? state.messages.slice(-2) : state.messages;
+  const ids = new Set(renderedMessages.map(m => m.id));
+  for (const [id,element] of messageCards) if (!ids.has(id)) {for(const image of element.querySelectorAll('.generated-image'))responseImageObserver?.unobserve(image);element.remove();messageCards.delete(id);}
   let previousCard=null;
-  for (const message of state.messages) {
+  const quickIds=new Set(state.messages.slice(-2).map(m=>m.id));
+  for (const message of renderedMessages) {
     let card = messageCards.get(message.id);
     if (!card) {
       card = document.createElement('article'); card.dataset.id = message.id; card.className = `message ${message.role}`;
       const label = document.createElement('div'); label.className = 'message-label';
       const body = document.createElement('div'); body.className = 'message-body';
       const error = document.createElement('div'); error.className = 'message-error';
+      const images=document.createElement('div');images.className='message-images';
       const tools = document.createElement('div'); tools.className = 'message-tools';
       const status = document.createElement('span'); const copy = document.createElement('button'); copy.textContent = '복사';
-      copy.addEventListener('click', () => { const value = state.messages.find(m => m.id === message.id); if (value) void act('copy', { text: value.text }); });
-      tools.append(status,copy); card.append(label,body,error,tools); messageCards.set(message.id,card);
+      copy.addEventListener('click', async () => { const value = state.messages.find(m => m.id === message.id); if (value && (await act('copy', { text: value.text })).ok) {copy.textContent='복사됨';setTimeout(()=>{copy.textContent='복사';},1600);} });
+      tools.append(status,copy); card.append(label,body,images,error,tools); messageCards.set(message.id,card);
       if(previousCard)previousCard.after(card);else messages.insertBefore(card,messages.querySelector('.message'));
     }
     if(previousCard && card.previousElementSibling!==previousCard)previousCard.after(card);
     previousCard=card;
+    card.classList.toggle('quick-visible',quickIds.has(message.id));
     const metadata=JSON.stringify({...message,text:undefined});
-    if (card.renderedText===message.text&&card.renderedMetadata===metadata&&card.renderedMeasure===state.settings.measureResponseTime) continue;
+    if (card.renderedText===message.text&&card.renderedMetadata===metadata&&card.renderedMeasure===state.settings.measureResponseTime&&card.renderedBuddyName===buddyName) continue;
+    card.renderedBuddyName=buddyName;
     card.renderedText=message.text;card.renderedMetadata=metadata;card.renderedMeasure=state.settings.measureResponseTime;
     card.dataset.status = message.status;
-    const messageLabel = message.role === 'user' ? '나' : `옹기봇${message.mode === 'demo' ? ' · 체험' : message.model ? ` · ${message.modelName || message.model} / ${message.effort}${message.serviceTier && message.serviceTier !== 'default' ? ` · ${message.serviceTierName || message.serviceTier}` : ''}` : ''}`;
+    const messageLabel = message.role === 'user' ? '나' : `${buddyName}${message.mode === 'demo' ? ' · 체험' : message.model ? ` · ${message.modelName || message.model} / ${message.effort}${message.serviceTier && message.serviceTier !== 'default' ? ` · ${message.serviceTierName || message.serviceTier}` : ''}` : ''}${message.persona?' · '+message.persona.name:''}`;
+    card.querySelector('.message-label').title=messageLabel;
     if (card.querySelector('.message-label').textContent !== messageLabel) card.querySelector('.message-label').textContent = messageLabel;
     const body = card.querySelector('.message-body');
     if (body.renderedSource !== message.text) {
@@ -275,7 +421,7 @@ window.onggi.onState(next => {
         for (const table of [...fragment.querySelectorAll('table')]) { const wrapper = document.createElement('div'); wrapper.className = 'markdown-table'; table.replaceWith(wrapper); wrapper.append(table); }
         for (const pre of fragment.querySelectorAll('pre')) {
           const code = pre.querySelector('code'); if (!code) continue;
-          const value = code.textContent, copyCode = document.createElement('button'); copyCode.type = 'button'; copyCode.className = 'copy-code'; copyCode.textContent = '코드 복사'; copyCode.addEventListener('click', () => act('copy', { text: value })); pre.append(copyCode);
+          const value = code.textContent, copyCode = document.createElement('button'); copyCode.type = 'button'; copyCode.className = 'copy-code'; copyCode.textContent = '코드 복사'; copyCode.addEventListener('click', async () => {if((await act('copy', { text: value })).ok){copyCode.textContent='복사됨';setTimeout(()=>{copyCode.textContent='코드 복사';},1600);}}); pre.append(copyCode);
         }
         body.replaceChildren(fragment);
       } else body.textContent = message.text;
@@ -292,17 +438,45 @@ window.onggi.onState(next => {
       const value = `수신 대답속도 측정${message.mode==='demo'?' · 체험(CLI 측정 없음)':''}\n${rows.join('\n')}`;
       if (timingBlock.textContent !== value) timingBlock.textContent = value;
     } else timingBlock?.remove();
-    card.querySelector('.message-error').textContent = message.error ?? ''; card.querySelector('.message-error').hidden = !message.error;
+    const imageRoot=card.querySelector('.message-images');let attachmentRoot=card.querySelector('.message-attachments');
+    if(!attachmentRoot){attachmentRoot=document.createElement('div');attachmentRoot.className='message-attachments';imageRoot.before(attachmentRoot);}
+    const attachmentSignature=JSON.stringify(message.attachments??[]);
+    if(attachmentRoot.dataset.signature!==attachmentSignature){
+      for(const image of attachmentRoot.querySelectorAll('.generated-image'))responseImageObserver.unobserve(image);attachmentRoot.replaceChildren();attachmentRoot.dataset.signature=attachmentSignature;
+      for(const attachment of message.attachments??[]){
+        const figure=document.createElement('figure'),caption=document.createElement('figcaption'),label=document.createElement('span');label.textContent=attachment.name+' · '+Math.ceil(attachment.bytes/1024)+'KiB';
+        if(attachment.kind==='image'){const image=document.createElement('img');image.className='generated-image attachment-image';image.alt=attachment.name;image.loading='lazy';image.dataset.messageId=message.id;image.dataset.attachmentId=attachment.id;figure.append(image);responseImageObserver.observe(image);}
+        const open=document.createElement('button');open.type='button';open.className='text-button';open.textContent=attachment.kind==='image'?'원본 열기 ↗':'저장본 위치 ↗';open.addEventListener('click',()=>act('open-attachment',{messageId:message.id,id:attachment.id}));caption.append(label,open);figure.append(caption);attachmentRoot.append(figure);
+      }
+    }
+    const imageSignature=JSON.stringify(message.images??[]);
+    if(imageRoot.dataset.signature!==imageSignature){
+      imageRoot.dataset.signature=imageSignature;for(const image of imageRoot.querySelectorAll('.generated-image'))responseImageObserver?.unobserve(image);imageRoot.replaceChildren();
+      for(const result of message.images??[]){
+        const figure=document.createElement('figure'),caption=document.createElement('figcaption');
+        if(result.status==='ready'){
+          const image=document.createElement('img');image.className='generated-image';image.alt='생성된 이미지';image.loading='lazy';image.dataset.messageId=message.id;image.dataset.imageId=result.id;image.width=Math.min(result.width,512);image.height=Math.round(image.width*result.height/result.width);
+          image.addEventListener('load',()=>{delete image.dataset.failed;caption.querySelector('span').textContent=`${result.width} × ${result.height}`;acknowledgeRenderedMessages();});image.addEventListener('error',()=>{image.dataset.failed='true';caption.querySelector('span').textContent='미리보기를 표시하지 못했어요. 원본을 열어 확인해주세요.';acknowledgeRenderedMessages();});figure.append(image);responseImageObserver.observe(image);
+          const description=document.createElement('span');description.textContent=`${result.width} × ${result.height}`;const open=document.createElement('button');open.type='button';open.className='text-button';open.textContent='원본 열기 ↗';open.addEventListener('click',()=>act('open-response-image',{messageId:message.id,imageId:result.id}));caption.append(description,open);
+        }else caption.textContent=result.status==='pending'?'이미지를 준비하고 있어요…':result.error??'이미지 생성을 완료하지 못했어요.';
+        figure.append(caption);imageRoot.append(figure);
+      }
+    }
+    const messageError = [message.error, message.displayTruncated ? '표시·복사 범위는 100,000자까지입니다. 가져온 원문은 로컬 파일에 보존합니다.' : message.textTruncated ? '응답이 100,000자 표시·보관 한도에 도달했습니다. 전체 원문은 CLI 세션에서 확인해주세요.' : null].filter(Boolean).join('\n');
+    card.querySelector('.message-error').textContent = messageError; card.querySelector('.message-error').hidden = !messageError;
     card.querySelector('.message-tools span').textContent = { queued: '대기 중', running: '답변 중', completed: '', interrupted: '중단됨 · 자동 재실행하지 않아요', failed: '연결 또는 작업 실패' }[message.status] ?? '';
     card.querySelector('.message-tools button').hidden = !message.text;
   }
   if (!state.messages.length) messages.scrollTop = 0;
   else if (prepended && !changedConversation) messages.scrollTop=previousTop+messages.scrollHeight-previousHeight;
-  else if (atBottom || changedConversation || next.messagePatch?.reset) messages.scrollTop = messages.scrollHeight;
+  else if (atBottom || changedConversation || next.messagePatch?.reset || compactChanged) messages.scrollTop = messages.scrollHeight;
+  document.querySelector('#jump-latest').hidden = !state.messages.length || messages.scrollHeight - messages.scrollTop - messages.clientHeight < 90;
+  if(panelRestored)for(const image of document.querySelectorAll('.generated-image:not([src])')){responseImageObserver.unobserve(image);responseImageObserver.observe(image);}
   const queueBar = document.querySelector('#queue-bar'); queueBar.hidden = state.queue.length === 0; queueBar.replaceChildren();
   if (state.queue.length) {
-    const text = document.createElement('span'); text.textContent = `차례대로 기다리는 질문 ${state.queue.length}개 `; queueBar.append(text);
-    for (let i = 0; i < state.queue.length; i++) { const cancel = document.createElement('button'); cancel.textContent = `${i + 1}번 취소`; cancel.addEventListener('click', () => act('cancel', { id: state.queue[i].id })); queueBar.append(cancel); }
+    const text = document.createElement('span'); text.textContent = `${state.queuePaused?'일시 정지된':'차례대로 기다리는'} 질문 ${state.queue.length}개 `; queueBar.append(text);
+    if(state.queuePaused){const resume=document.createElement('button');resume.textContent='계속';resume.addEventListener('click',()=>act('continue-queue'));queueBar.append(resume);}
+    for (let i = 0; i < state.queue.length; i++) { const row=document.createElement('div'),label=document.createElement('span'),cancel = document.createElement('button');row.className='queue-entry';label.textContent=`${i+1}. ${state.queue[i].text.slice(0,45)}${state.queue[i].attachmentCount?' · 첨부 '+state.queue[i].attachmentCount+'개':''}`;label.title=state.queue[i].text;cancel.textContent = `${i + 1}번 취소`; cancel.addEventListener('click', () => act('cancel', { id: state.queue[i].id }));row.append(label,cancel);queueBar.append(row); }
   }
   const signature = JSON.stringify(state.requests.map(r => r.id));
   if (signature !== lastRequestSignature) {
@@ -321,18 +495,19 @@ window.onggi.onState(next => {
         }
         const answer = document.createElement('button'); answer.textContent = '답변 보내기'; answer.addEventListener('click', () => act('respond', { id: request.id, answers: Object.fromEntries(fields.map(f => [f.id,f.input.value])) })); card.append(answer);
       } else {
-        const description = document.createElement('pre'); description.textContent = [request.params.command ?? request.details?.command,request.params.cwd,request.params.reason,request.details?.changes ? JSON.stringify(request.details.changes,null,2) : null,request.params.permissions ? JSON.stringify(request.params.permissions) : null].filter(Boolean).join('\n') || '작업에 추가 권한이 필요해요.'; card.append(description);
+        const description = document.createElement('pre'); description.textContent = [request.params.networkApprovalContext?'네트워크 접근 승인 · '+JSON.stringify(request.params.networkApprovalContext,null,2):null,request.params.command ?? request.details?.command,request.params.cwd,request.params.reason,request.details?.changes ? JSON.stringify(request.details.changes,null,2) : null,request.params.permissions ? JSON.stringify(request.params.permissions) : null].filter(Boolean).join('\n') || '작업에 추가 권한이 필요해요.'; card.append(description);
+        if (request.details?.truncated) {const note=document.createElement('p');note.textContent='변경 내용이 너무 커 미리보기를 생략했습니다. 전체 내용을 확인할 수 없어 이 창에서는 허용하지 않습니다.';card.append(note);}
         if (request.method === 'item/permissions/requestApproval') {
           const note = document.createElement('p'); note.textContent = '알파에서는 추가 권한 프로필을 부여하지 않아요.'; card.append(note);
           const deny = document.createElement('button'); deny.textContent = '추가 권한 없이 진행'; deny.addEventListener('click', () => act('respond', { id: request.id })); card.append(deny);
         } else {
-          for (const [decision, label] of [['accept','이번 작업 허용'],['decline','거절'],['cancel','취소']]) { const button = document.createElement('button'); button.textContent = label; button.addEventListener('click', () => act('respond', { id: request.id, decision })); card.append(button); }
+          for (const [decision, label] of [['accept','이번 작업 허용'],['decline','거절'],['cancel','취소']]) { const button = document.createElement('button'); button.textContent = label; button.disabled=decision==='accept'&&Boolean(request.details?.truncated||request.method==='item/fileChange/requestApproval'&&(!Array.isArray(request.details?.changes)||!request.details.changes.length)); button.addEventListener('click', () => act('respond', { id: request.id, decision })); card.append(button); }
         }
       }
       requestRoot.append(card);
     }
   }
-  if (state.warning && state.warning !== lastState) { lastState = state.warning; document.querySelector('#toast').textContent = state.warning; document.querySelector('#toast').hidden = false; }
+  if (state.warning && state.warning !== lastWarning) { lastWarning = state.warning; document.querySelector('#toast').textContent = state.warning; document.querySelector('#toast').hidden = false; }
   acknowledgeRenderedMessages();
 });
 
@@ -350,12 +525,57 @@ document.querySelector('#delete-confirm').addEventListener('click',async()=>{
 window.onggi.onTab(showTab);
 for (const button of document.querySelectorAll('[data-tab]')) button.addEventListener('click', () => showTab(button.dataset.tab));
 document.querySelector('#close-panel').addEventListener('click', () => act('hide-panel'));
+document.querySelector('#close-mini').addEventListener('click',()=>act('hide-panel'));
+document.querySelector('#expand-chat').addEventListener('click',()=>act('show-panel',{tab:'chat',full:true}));
+document.querySelector('#mini-settings').addEventListener('click',()=>act('show-panel',{tab:'settings'}));
+for(const [id,key]of [['skin-select','skinId'],['chat-mode','chatMode']])document.querySelector('#'+id).addEventListener('change',async event=>{const result=await act('settings',{[key]:event.target.value});if(!result.ok)void act('sync');});
+document.querySelector('#persona-select').addEventListener('change',async event=>{const result=await act('persona-settings',{characterId:state.settings.characterId,mode:event.target.value});if(!result.ok)void act('sync');});
+document.querySelector('#persona-character').addEventListener('change',()=>{
+  const character=document.querySelector('#persona-character').value,selector=document.querySelector('#persona-edit-mode'),previous=selector.value;selector.replaceChildren();
+  for(const entry of personaCatalog.find(p=>p.characterId===character)?.entries??[]){const option=document.createElement('option');option.value=entry.id;option.textContent=entry.name+(entry.archived?' · 보관':'');selector.append(option);}
+  if([...selector.options].some(o=>o.value===previous))selector.value=previous;
+  selector.dispatchEvent(new Event('change'));
+});
+document.querySelector('#persona-edit-mode').addEventListener('change',()=>{
+  const character=document.querySelector('#persona-character').value,id=document.querySelector('#persona-edit-mode').value,group=personaCatalog.find(p=>p.characterId===character),entry=group?.entries.find(e=>e.id===id);
+  const signature=JSON.stringify([character,id,entry?.text]);if(signature===editorSignature)return;editorSignature=signature;
+  document.querySelector('#persona-text').value=editorDrafts.get(character+':'+id)??entry?.text??'';
+  document.querySelector('#persona-mode-name').value=entry?.name??'';
+  document.querySelector('#save-persona').disabled=Boolean(entry?.archived||group?.warning);
+  document.querySelector('#persona-rename').disabled=entry?.kind!=='user';document.querySelector('#persona-archive').disabled=entry?.kind!=='user'||Boolean(entry?.archived);document.querySelector('#persona-unarchive').disabled=!entry?.archived;document.querySelector('#persona-reset').disabled=entry?.kind==='user';
+  const status=document.querySelector('#persona-editor-status');status.hidden=!entry?.error&&!group?.warning;if(group?.warning)status.textContent='말투 목록 복구가 필요해요. '+group.warning+' MD 폴더에서 원본을 확인한 뒤 파일 다시 읽기를 눌러주세요.';else if(entry?.error)status.textContent=entry.error+' 내용을 다시 입력해서 저장할 수 있어요.';
+});
+document.querySelector('#persona-editor-form').addEventListener('submit',async event=>{
+  event.preventDefault();const button=document.querySelector('#save-persona'),status=document.querySelector('#persona-editor-status');if(button.disabled)return;button.disabled=true;
+  const characterId=document.querySelector('#persona-character').value,id=document.querySelector('#persona-edit-mode').value,text=document.querySelector('#persona-text').value,key=characterId+':'+id;
+  const result=await act('persona-save',{characterId,id,text});
+  if(result.ok&&(!editorDrafts.has(key)||editorDrafts.get(key)===text))editorDrafts.delete(key);
+  if(document.querySelector('#persona-character').value===characterId&&document.querySelector('#persona-edit-mode').value===id){if(result.ok)editorSignature=JSON.stringify([characterId,id,text]);status.textContent=result.ok?'Markdown을 저장했어요. 다음 질문부터 적용돼요.':'저장하지 못했어요. 내용을 확인해주세요.';status.hidden=false;}
+  button.disabled=Boolean(personaCatalog.find(p=>p.characterId===document.querySelector('#persona-character').value)?.entries.find(e=>e.id===document.querySelector('#persona-edit-mode').value)?.archived);
+});
+document.querySelector('#reload-personas').addEventListener('click',async()=>{editorSignature='';personaSignature='';await act('persona-reload');});
+document.querySelector('#persona-text').addEventListener('input',event=>{editorDrafts.set(document.querySelector('#persona-character').value+':'+document.querySelector('#persona-edit-mode').value,event.target.value);});
+document.querySelector('#open-personas').addEventListener('click',()=>act('open-personas'));
 document.querySelector('#load-older').addEventListener('click',async event=>{event.currentTarget.disabled=true;const result=await act('load-older');if(!result.ok)document.querySelector('#load-older').disabled=false;});
 document.querySelector('#new-chat').addEventListener('click', () => act('new-chat'));
 document.querySelector('#history-search').addEventListener('input',renderHistory);
 document.querySelector('#history-new').addEventListener('click',async()=>{const result=await act('new-chat');if(result.ok)showTab('chat');});
 document.querySelector('#stop').addEventListener('click', () => act('cancel'));
 document.querySelector('#refresh-models').addEventListener('click', () => act('refresh-models'));
+for(const id of ['reconnect','connection-retry','check-connection'])document.querySelector('#'+id).addEventListener('click',()=>{if(id==='check-connection')showTab('chat');void act('recover-connection');});
+document.querySelector('#login-chatgpt').addEventListener('click',async()=>{const button=document.querySelector('#login-chatgpt');button.disabled=true;try{await act('login-chatgpt');}finally{button.disabled=false;}});
+document.querySelector('#cancel-login').addEventListener('click',()=>act('cancel-login'));
+document.querySelector('#refresh-conversation').addEventListener('click',()=>{if(state?.activeConversationId)void act('open-conversation',{id:state.activeConversationId});});
+document.querySelector('#find-cli').addEventListener('click',()=>act('find-cli'));
+document.querySelector('#connection-workspace').addEventListener('click',()=>act('pick-workspace'));
+document.querySelector('#install-cli').addEventListener('click',()=>act('open-url',{url:'https://learn.chatgpt.com/docs/codex/cli'}));
+document.querySelector('#model-popover').addEventListener('toggle',event=>{
+  if(event.newState!=='open')return;
+  const menu=event.currentTarget,trigger=document.querySelector('#model-menu-toggle').getBoundingClientRect();
+  menu.style.left=Math.max(12,Math.min(innerWidth-menu.offsetWidth-12,trigger.right-menu.offsetWidth))+'px';
+  menu.style.top=Math.max(12,Math.min(innerHeight-menu.offsetHeight-12,trigger.top-menu.offsetHeight-8))+'px';
+});
+window.addEventListener('resize',()=>{const menu=document.querySelector('#model-popover');if(menu.matches(':popover-open'))menu.hidePopover();});
 for (const id of ['model-select','effort-select','speed-select']) document.querySelector('#' + id).addEventListener('change', async () => {
   if (modelSaving) return;
   modelSaving = true;
@@ -372,37 +592,102 @@ document.querySelector('#messages').addEventListener('click', event => {
   const link = event.target.closest('.markdown-body a');
   if (link) { event.preventDefault(); void act('open-url', { url: link.getAttribute('href') }); }
 });
-document.querySelector('#import-pack').addEventListener('click', () => act('import-pack'));
+document.querySelector('#messages').addEventListener('scroll',event=>{const messages=event.currentTarget;document.querySelector('#jump-latest').hidden=!state?.messages.length||messages.scrollHeight-messages.scrollTop-messages.clientHeight<90;},{passive:true});
+document.querySelector('#jump-latest').addEventListener('click',()=>{const messages=document.querySelector('#messages');messages.scrollTop=messages.scrollHeight;document.querySelector('#jump-latest').hidden=true;});
+for(const id of ['import-pack','pack-restore'])document.querySelector('#'+id).addEventListener('click',async()=>{
+  if(packOperation)return;packOperation=true;
+  try{const result=await act('pack-preview',id==='pack-restore'?{archiveToken:document.querySelector('#pack-archive-select').value}:{});if(!result.ok||result.canceled)return;
+    packPreviewUi=result;document.querySelector('#pack-preview-image').src=result.pack.thumbnail;document.querySelector('#pack-preview-error-image').src=result.pack.errorThumbnail;
+    document.querySelector('#pack-preview-description').textContent=[result.pack.name+' · '+result.pack.version,result.pack.description,result.installedVersion?'기존 버전: '+result.installedVersion:null,result.pack.author?'제작: '+result.pack.author:null,result.pack.license?'이용 조건: '+result.pack.license:null,result.pack.source?'출처: '+result.pack.source:null,result.pack.hasPoster?'자동 재생 이미지는 정적 대표 프레임으로 표시해요.':null].filter(Boolean).join('\n');
+    document.querySelector('#pack-replace-row').hidden=!result.installedVersion;document.querySelector('#pack-replace').checked=false;document.querySelector('#pack-select-after').checked=false;document.querySelector('#pack-preview-status').hidden=true;document.querySelector('#pack-preview-dialog').showModal();document.querySelector('#pack-preview-cancel').focus();
+  }finally{packOperation=false;}
+});
+document.querySelector('#pack-preview-apply').addEventListener('click',async()=>{
+  if(!packPreviewUi||packOperation)return;packOperation=true;const button=document.querySelector('#pack-preview-apply');button.disabled=true;
+  try{const result=await act('pack-apply',{token:packPreviewUi.token,replace:document.querySelector('#pack-replace').checked,select:document.querySelector('#pack-select-after').checked});if(result.ok)document.querySelector('#pack-preview-dialog').close();else{document.querySelector('#pack-preview-status').hidden=false;document.querySelector('#pack-preview-status').textContent='적용하지 못했어요. 안내를 확인하고 다시 시도해주세요.';}}finally{packOperation=false;button.disabled=false;}
+});
+document.querySelector('#pack-preview-cancel').addEventListener('click',()=>{if(!packOperation)document.querySelector('#pack-preview-dialog').close();});
+document.querySelector('#pack-preview-dialog').addEventListener('cancel',event=>{if(packOperation)event.preventDefault();});
+document.querySelector('#pack-preview-dialog').addEventListener('close',()=>{if(packPreviewUi)void act('pack-discard-preview',{token:packPreviewUi.token});packPreviewUi=null;});
+document.querySelector('#pack-manage-select').addEventListener('change',event=>{const pack=catalog.find(p=>p.id===event.target.value);document.querySelector('#pack-metadata').textContent=pack?[pack.name+' · '+pack.version,pack.author,pack.license,pack.source].filter(Boolean).join(' · '):'';document.querySelector('#pack-remove').disabled=!pack||pack.builtin;});
+document.querySelector('#pack-export').addEventListener('click',async()=>{const result=await act('pack-export',{id:document.querySelector('#pack-manage-select').value,includeEdited:document.querySelector('#pack-export-edited').checked});const status=document.querySelector('#pack-manage-status');if(result.ok&&!result.canceled){status.hidden=false;status.textContent='내보냈어요: '+result.destination;}});
+document.querySelector('#pack-remove').addEventListener('click',()=>{packRemoveTarget=document.querySelector('#pack-manage-select').value;document.querySelector('#pack-remove-description').textContent=catalog.find(p=>p.id===packRemoveTarget)?.name??'';document.querySelector('#pack-remove-dialog').showModal();document.querySelector('#pack-remove-cancel').focus();});
+document.querySelector('#pack-remove-cancel').addEventListener('click',()=>{if(!packOperation)document.querySelector('#pack-remove-dialog').close();});
+document.querySelector('#pack-remove-dialog').addEventListener('cancel',event=>{if(packOperation)event.preventDefault();});
+document.querySelector('#pack-remove-confirm').addEventListener('click',async()=>{if(packOperation)return;packOperation=true;const button=document.querySelector('#pack-remove-confirm');button.disabled=true;try{const result=await act('pack-remove',{id:packRemoveTarget,confirmed:true});if(result.ok)document.querySelector('#pack-remove-dialog').close();}finally{packOperation=false;button.disabled=false;}});
 document.querySelector('#pick-workspace').addEventListener('click', () => act('pick-workspace'));
 document.querySelector('#pick-codex').addEventListener('click', () => act('pick-codex'));
 document.querySelector('#open-data').addEventListener('click', () => act('open-data'));
-for (const [id,key] of [['demo-mode','demo'],['reduced-motion','reducedMotion'],['always-on-top','alwaysOnTop'],['measure-response-time','measureResponseTime']]) document.querySelector('#' + id).addEventListener('change', event => { void act('settings', { [key]: event.target.checked }).then(result => { if (!result.ok) void act('sync'); }); });
+document.querySelector('#buddy-name').addEventListener('input',()=>{document.querySelector('#buddy-name-status').hidden=true;document.querySelector('#buddy-name').removeAttribute('aria-invalid');});
+document.querySelector('#buddy-name-form').addEventListener('submit',async event=>{
+  event.preventDefault();
+  const input=document.querySelector('#buddy-name'),button=document.querySelector('#save-buddy-name'),status=document.querySelector('#buddy-name-status');
+  if(button.disabled)return;
+  button.disabled=true;status.hidden=true;input.removeAttribute('aria-invalid');
+  try{
+    const result=await window.onggi.action('rename-buddy',{name:input.value});
+    if(!result.ok)throw new Error('이름을 저장하지 못했어요. 다시 시도해주세요.');
+    input.value=result.name;status.textContent='이름을 저장했어요.';status.classList.remove('name-error');status.hidden=false;
+  }catch(error){
+    status.textContent=error.message.replace(/^Error invoking remote method 'action': Error: /,'');status.classList.add('name-error');status.hidden=false;input.setAttribute('aria-invalid','true');input.focus();
+  }finally{button.disabled=false;}
+});
+for (const [id,key] of [['demo-mode','demo'],['reduced-motion','reducedMotion'],['always-on-top','alwaysOnTop'],['measure-response-time','measureResponseTime'],['battery-saver','batterySaver']]) document.querySelector('#' + id).addEventListener('change', event => { void act('settings', { [key]: event.target.checked }).then(result => { if (!result.ok) void act('sync'); }); });
 document.querySelector('#composer').addEventListener('submit', async event => {
-  event.preventDefault(); const input = document.querySelector('#prompt'), text = input.value;
-  if (!text.trim()) return;
-  const result = await act('send', { text,submittedAt:performance.timeOrigin + performance.now() }); if (result.ok && input.value === text) input.value = '';
+  event.preventDefault(); const input = document.querySelector('#prompt'), text = input.value,conversationId=state?.activeConversationId,attachmentIds=(attachmentDrafts.get(conversationId??'new')??[]).map(a=>a.id);
+  if(submitting||pickingAttachments||state?.attachmentPicking||!text.trim()&&!attachmentIds.length)return;
+  submitting=true;document.querySelector('#send').disabled=true;
+  try{
+    const result=await act('send',{text,attachmentIds,submittedAt:performance.timeOrigin+performance.now()});
+    if(result.ok){for(const key of [conversationId??'new',result.conversationId])attachmentDrafts.set(key,(attachmentDrafts.get(key)??[]).filter(a=>!attachmentIds.includes(a.id)));}
+    if(result.ok&&input.value===text){input.value='';input.dispatchEvent(new Event('input'));}
+    if(result.ok&&!conversationId&&result.conversationId){drafts.set(result.conversationId,input.value);if(!state?.activeConversationId)createdConversationId=result.conversationId;drafts.delete('new');}
+  }finally{submitting=false;renderDraftAttachments();}
+});
+for(const [id,kind]of [['attach-image','image'],['attach-file','file']])document.querySelector('#'+id).addEventListener('click',async()=>{
+  if(submitting||pickingAttachments)return;pickingAttachments=true;renderDraftAttachments();
+  try{
+    const result=await act('pick-attachments',{kind});if(!result.ok)return;const key=state?.activeConversationId??'new',previous=attachmentDrafts.get(key)??[],next=[...previous,...result.attachments];
+    if(next.length>8||next.reduce((sum,a)=>sum+a.bytes,0)>32*1024*1024){for(const attachment of result.attachments)await act('discard-attachment',{id:attachment.id});const toast=document.querySelector('#toast');toast.textContent='첨부는 최대 8개, 합계 32MiB까지 가능해요.';toast.hidden=false;clearTimeout(toastTimer);toastTimer=setTimeout(()=>{toast.hidden=true;},6500);return;}
+    attachmentDrafts.set(key,next);
+  }finally{pickingAttachments=false;renderDraftAttachments();}
 });
 document.querySelector('#prompt').addEventListener('keydown', event => { if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); document.querySelector('#composer').requestSubmit(); } });
 document.querySelector('#prompt').addEventListener('input', event => {
+  const input=event.target;input.style.height='auto';input.style.height=Math.min(parseFloat(getComputedStyle(input).maxHeight),Math.max(parseFloat(getComputedStyle(input).minHeight),input.scrollHeight))+'px';
   if (state && !state.busy && !state.sleeping) renderCharacter(event.target.value ? 'listening' : state.characterState);
   const listening = Boolean(event.target.value); if (listening !== lastListening) { lastListening = listening; void act('activity', { listening }); }
 });
-for (const button of document.querySelectorAll('[data-prompt]')) button.addEventListener('click', () => { document.querySelector('#prompt').value = button.dataset.prompt; document.querySelector('#prompt').focus(); });
+for (const button of document.querySelectorAll('[data-prompt]')) button.addEventListener('click', () => { const input=document.querySelector('#prompt');input.value = button.dataset.prompt;input.dispatchEvent(new Event('input'));input.focus(); });
 for (const id of ['pet-bubble','pet-chat']) document.querySelector('#' + id).addEventListener('click', () => act('show-panel', { tab: 'chat' }));
 document.querySelector('#pet-settings').addEventListener('click', () => act('show-panel', { tab: 'settings' }));
 document.querySelector('#pet-sleep').addEventListener('click', () => act('sleep'));
 const petCharacter = document.querySelector('#pet-character');
 petCharacter.addEventListener('pointerenter', () => {
-  if (surface === 'pet' && state && !drag && petCharacter.dataset.state === 'idle') {
-    document.querySelector('#pet-surface').classList.add('pet-active');
-    if (document.querySelector('#pet-bubble').hidden) { bubbleState = null; renderCharacter('idle'); }
+  if (surface === 'pet' && state && !drag) {
+    const root=document.querySelector('#pet-surface');
+    if(!petPointerInsideCharacter&&!root.classList.contains('pet-active')){
+      root.classList.add('pet-active');clearTimeout(controlsTimer);
+      controlsTimer=setTimeout(()=>{root.classList.remove('pet-active');void syncPetLayout();},3000);
+    }
+    petHovering = true;
+    if (petCharacter.dataset.state === 'idle') { clearTimeout(bubbleTimer); document.querySelector('#pet-bubble').hidden = false; void syncPetLayout(); }
     else void syncPetLayout();
+  }
+});
+petCharacter.addEventListener('pointerleave', () => {
+  petHovering = false;
+  if (surface === 'pet' && !drag && petCharacter.dataset.state === 'idle') {
+    clearTimeout(bubbleTimer);
+    bubbleTimer = setTimeout(() => { document.querySelector('#pet-bubble').hidden = true; void syncPetLayout(); },3000);
   }
 });
 petCharacter.addEventListener('pointerdown', async event => {
   if (event.button !== 0) return;
   const gesture = {x:event.screenX,y:event.screenY,lastX:event.screenX,lastY:event.screenY,moved:false,ready:false}; drag = gesture;
+  clearTimeout(controlsTimer);document.querySelector('#pet-surface').classList.remove('pet-active');
   document.querySelector('#pet-surface').classList.add('pet-dragging');
+  syncAnimation();
   petCharacter.setPointerCapture(event.pointerId); clearTimeout(bubbleTimer); document.querySelector('#pet-bubble').hidden = true;
   await syncPetLayout();
   if (drag !== gesture) return;
@@ -419,14 +704,48 @@ petCharacter.addEventListener('pointermove', event => {
 petCharacter.addEventListener('pointerup', () => { if (drag && !drag.moved) void act('show-panel', { tab: 'chat' }); void act('drag-end').then(()=>{petLayoutSignature='';void syncPetLayout();}); drag = null; document.querySelector('#pet-surface').classList.remove('pet-dragging'); });
 petCharacter.addEventListener('pointercancel', () => { void act('drag-end').then(()=>{petLayoutSignature='';void syncPetLayout();}); drag = null; document.querySelector('#pet-surface').classList.remove('pet-dragging'); });
 petCharacter.addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); void act('show-panel', { tab: 'chat' }); } });
-document.addEventListener('keydown', event => { if (event.key === 'Escape' && surface === 'panel') void act('hide-panel'); });
-document.addEventListener('visibilitychange', () => {document.body.classList.toggle('page-hidden', document.hidden);acknowledgeRenderedMessages();});
+document.addEventListener('keydown', event => { if (event.key === 'Escape' && surface === 'panel') {const menu=document.querySelector('#model-popover');if(menu.matches(':popover-open')){event.preventDefault();menu.hidePopover();document.querySelector('#model-menu-toggle').focus();}else void act('hide-panel');} });
+document.addEventListener('visibilitychange', () => { document.body.classList.toggle('page-hidden', document.hidden);syncAnimation();if(!document.hidden)void act('sync'); });
 if (surface === 'pet') window.onggi.onPetPointer(pointer => {
   const root = document.querySelector('#pet-surface');
-  if (!drag && !pointer.insideWindow) root.classList.remove('pet-active');
-  if (pointer.insideCharacter) root.classList.add('pet-active');
+  const entering=pointer.insideCharacter&&!petPointerInsideCharacter, leaving=!pointer.insideCharacter&&petPointerInsideCharacter;petPointerInsideCharacter=pointer.insideCharacter;
+  petHovering = pointer.insideCharacter;
+  if (!drag && petCharacter.dataset.state === 'idle' && (entering || leaving)) {
+    clearTimeout(bubbleTimer);
+    if (entering) document.querySelector('#pet-bubble').hidden = false;
+    else bubbleTimer = setTimeout(() => { document.querySelector('#pet-bubble').hidden = true; void syncPetLayout(); },3000);
+  }
+  if (!drag && !pointer.insideWindow) {clearTimeout(controlsTimer);root.classList.remove('pet-active');}
+  if (!drag && entering) {
+    root.classList.add('pet-active');clearTimeout(controlsTimer);
+    controlsTimer=setTimeout(()=>{root.classList.remove('pet-active');void syncPetLayout();},3000);
+  }
   void syncPetLayout();
 });
 if (surface === 'pet') document.addEventListener('mousemove',event=>void act('pet-pointer-sync',{x:event.screenX,y:event.screenY}));
-if (surface === 'pet') for (const event of ['focusin','focusout']) document.querySelector('#pet-surface').addEventListener(event,()=>void syncPetLayout());
+if (surface === 'pet') document.querySelector('#pet-surface').addEventListener('focusin',event=>{
+  if(drag)return;const root=event.currentTarget;root.classList.add('pet-active');clearTimeout(controlsTimer);
+  controlsTimer=setTimeout(()=>{root.classList.remove('pet-active');void syncPetLayout();},3000);void syncPetLayout();
+});
+document.querySelector('#toast').addEventListener('click',()=>{document.querySelector('#toast').hidden=true;clearTimeout(toastTimer);});
 void act('sync');
+
+for(const id of ['pet-image','welcome-image'])document.querySelector('#'+id).addEventListener('error',event=>{
+  const image=event.currentTarget,pack=activeCharacter;
+  if(!pack)return;
+  if(image.currentSrc&&image.currentSrc!==image.getAttribute('src'))return;
+  const source=image.getAttribute('src');if(![...Object.values(pack.assets),...pack.animationFrames].includes(source))return;
+  const failed=failedImages.get(pack.revision)??new Set();failed.add(source);failedImages.set(pack.revision,failed);
+  if(image===document.querySelector('#pet-image')){animationFailed=pack.revision;clearTimeout(animationTimer);animationRun=null;image.dataset.animating='false';}
+  if(!failed.has(pack.assets.idle)){image.src=pack.assets.idle;return;}
+  image.src='data:image/svg+xml;base64,'+btoa('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><circle cx="50" cy="50" r="36" fill="#48644c"/><circle cx="38" cy="44" r="4" fill="white"/><circle cx="62" cy="44" r="4" fill="white"/><path d="M35 62Q50 74 65 62" fill="none" stroke="white" stroke-width="4"/></svg>');
+});
+
+for(const [id,key]of [['appearance-profile','appearanceProfile'],['character-scale','characterScale']])document.querySelector('#'+id).addEventListener('change',event=>void act('settings',{[key]:key==='characterScale'?Number(event.target.value):event.target.value}).then(()=>act('sync')));
+
+for(const [id,operation]of [['persona-clone','clone'],['persona-rename','rename'],['persona-reset','reset'],['persona-archive','archive'],['persona-unarchive','unarchive']])document.querySelector('#'+id).addEventListener('click',async event=>{
+  const characterId=document.querySelector('#persona-character').value,mode=document.querySelector('#persona-edit-mode').value,key=characterId+':'+mode,entry=personaCatalog.find(p=>p.characterId===characterId)?.entries.find(e=>e.id===mode),status=document.querySelector('#persona-editor-status');
+  if(operation==='clone'&&editorDrafts.has(key)&&editorDrafts.get(key)!==entry?.text){status.hidden=false;status.textContent='현재 편집 내용을 먼저 저장해주세요. 복제는 저장된 MD를 사용해요.';return;}
+  const button=event.currentTarget;button.disabled=true;
+  try{const result=await act('persona-manage',{characterId,id:mode,operation,name:document.querySelector('#persona-mode-name').value});if(result.ok){if(operation==='reset')editorDrafts.delete(key);editorSignature='';personaSignature='';await act('sync');status.textContent=operation==='reset'?'현재 MD를 백업하고 기본 내용으로 복원했어요.':'말투 목록을 변경했어요. 기존 질문은 유지돼요.';status.hidden=false;}}finally{button.disabled=false;}
+});

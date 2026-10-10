@@ -1,0 +1,16 @@
+{
+  "id": "night",
+  "name": "고요한 밤",
+  "colors": {
+    "cream": "#20271f",
+    "text": "#e6eedf",
+    "muted": "#a6b29a",
+    "line": "#44503b",
+    "surface": "#2b3427",
+    "wash": "#35442d",
+    "green": "#a7c987",
+    "accentInk": "#22341a",
+    "field": "#273221",
+    "danger": "#efad8c"
+  }
+}

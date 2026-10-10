@@ -10,6 +10,7 @@ let failNextDelete=false;
 const send=value=>process.stdout.write(JSON.stringify(value)+'\n');
 readline.createInterface({input:process.stdin}).on('line',line=>{
   const message=JSON.parse(line), {method,params={},id}=message;
+  if(method==='account/read')send({id,result:{account:{type:'chatgpt',email:null,planType:'plus'},requiresOpenaiAuth:true}});
   if(method==='initialize')send({id,result:{userAgent:'model-test'}});
   if(method==='model/list')send({id,result:{data:[
     {model:'test-main',id:'test-main',displayName:'Test Main',isDefault:true,hidden:false,defaultReasoningEffort:'low',supportedReasoningEfforts:[{reasoningEffort:'low'},{reasoningEffort:'high'}],serviceTiers:[{id:'priority',name:'Fast',description:'Test fast speed; increased usage'}]},

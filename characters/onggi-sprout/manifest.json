@@ -21,5 +21,34 @@
     "attention": "attention.svg",
     "error": "error.svg",
     "sleeping": "sleeping.svg"
+  },
+  "personas": {
+    "base": "personas/base.md",
+    "modes": [
+      {
+        "id": "friendly",
+        "name": "친절한 모드",
+        "description": "짧고 친절하게, 필요한 다음 행동까지",
+        "file": "personas/friendly.md"
+      },
+      {
+        "id": "warm-long",
+        "name": "상냥한 장문 모드",
+        "description": "차근차근 자세히 설명하는 말투",
+        "file": "personas/warm-long.md"
+      },
+      {
+        "id": "concise",
+        "name": "핵심 단답 모드",
+        "description": "이모지 없이 핵심만 짧게",
+        "file": "personas/concise.md"
+      },
+      {
+        "id": "blunt",
+        "name": "퉁퉁이 모드",
+        "description": "툴툴대는 반말, 내용은 정확하게",
+        "file": "personas/blunt.md"
+      }
+    ]
   }
 }

@@ -1,7 +1,7 @@
 {
   "name": "onggi-bot",
   "productName": "OnggiBot",
-  "version": "0.1.0-alpha.9",
+  "version": "0.1.0-alpha.14",
   "description": "A modular desktop companion connected to your local Codex CLI",
   "private": true,
   "main": "src/main.cjs",
@@ -25,16 +25,34 @@
     "smoke:timing": "npm run build && electron . --timing-smoke",
     "smoke:performance": "npm run build && electron . --performance-smoke",
     "smoke:delete": "npm run build && electron . --delete-smoke",
-    "codex:delete-smoke": "node scripts/codex-delete-smoke.cjs"
+    "codex:delete-smoke": "node scripts/codex-delete-smoke.cjs",
+    "smoke:buddy": "npm run build && electron . --buddy-features-smoke",
+    "codex:personas": "node scripts/persona-real-smoke.cjs",
+    "lint": "eslint src scripts test *.config.cjs && node scripts/lint-css.cjs",
+    "smoke:stability": "npm run build && electron . --stability-smoke",
+    "smoke:resources": "npm run build && electron . --resource-smoke",
+    "smoke:lifecycle": "npm run build && electron . --buddy-lifecycle-smoke",
+    "smoke:assets": "electron scripts/asset-validation-smoke.cjs",
+    "smoke:connection-images": "npm run build && electron . --connection-image-smoke",
+    "smoke:attachments": "npm run build && electron . --attachments-smoke",
+    "smoke:integration": "npm run build && node scripts/integration-smoke.cjs",
+    "verify:package": "electron scripts/verify-package.cjs",
+    "smoke:packaged-resources": "electron scripts/packaged-resource-smoke.cjs",
+    "codex:attachments": "electron scripts/real-input-smoke.cjs"
   },
   "devDependencies": {
     "@electron/packager": "20.3.0",
+    "css-tree": "3.2.1",
     "electron": "44.5.1",
-    "esbuild": "0.28.2"
+    "esbuild": "0.28.2",
+    "eslint": "10.12.0"
   },
   "dependencies": {
     "dompurify": "3.4.16",
     "markdown-it": "15.0.2",
     "markdown-it-cjk-friendly": "3.0.0"
+  },
+  "engines": {
+    "node": "^22.13.0 || >=24.0.0"
   }
 }
