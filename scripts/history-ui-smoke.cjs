@@ -3,6 +3,7 @@ const path = require('node:path');
 const { Store } = require('../src/store.cjs');
 module.exports = async ({app,panel,store,codex}) => {
   try {
+    const artifactRoot=path.resolve(process.env.ONGGI_SMOKE_ROOT??path.join(__dirname,'..','artifacts'));fs.mkdirSync(artifactRoot,{recursive:true});
     await panel.webContents.executeJavaScript(`(async()=>{
       await window.onggi.action('refresh-models');
       await window.onggi.action('send',{text:'첫 번째 옹기 이야기'});
@@ -52,10 +53,25 @@ module.exports = async ({app,panel,store,codex}) => {
     if(reloaded.data.conversations.length!==2 || reloaded.data.threadId!==firstThread || reloaded.data.messages.length!==4)throw new Error('Restart persistence failed');
     reloaded.openConversation(second);
     if(reloaded.data.messages.length!==2 || reloaded.data.threadId!==secondThread)throw new Error('Other conversation overwritten');
-    store.save();
+    const synthetic=await codex.request('test/add-history-turns',{threadId:firstThread,count:60}),request=codex.request;let pageRequests=0;
+    codex.request=function(method,...args){if(method==='thread/turns/list')pageRequests++;return request.call(this,method,...args);};
+    try{await panel.webContents.executeJavaScript(`window.onggi.action('open-conversation',{id:${JSON.stringify(first)}})`);}finally{codex.request=request;}
+    if(pageRequests!==1||synthetic.turns!==62||store.data.messages.length!==54||store.data.messages[0].text!=='첫 번째 옹기 이야기'||store.data.messages.at(-1).text!=='synthetic answer 59')throw Error('Initial history page or original metadata failed');
+    const initialPage={requests:pageRequests,messages:store.data.messages.length};
+    codex.request=function(method,...args){if(method==='thread/turns/list')pageRequests++;return request.call(this,method,...args);};
+    try{
+      await panel.webContents.executeJavaScript(`window.onggi.action('load-older')`);
+      if(pageRequests!==2||store.data.messages.length!==104)throw Error('Second history page did not preserve local records');
+      await panel.webContents.executeJavaScript(`window.onggi.action('load-older')`);
+    }finally{codex.request=request;}
+    if(pageRequests!==3||store.data.messages.length!==124||new Set(store.data.messages.map(message=>message.id)).size!==124)throw Error('Incremental history pages lost or duplicated records');
+    const pagedHistory=await panel.webContents.executeJavaScript(`(async()=>{const deadline=Date.now()+5000;while(Date.now()<deadline&&document.querySelectorAll('.message').length!==124)await new Promise(r=>setTimeout(r,25));return{cards:document.querySelectorAll('.message').length,first:document.querySelector('.message')?.dataset.id,olderHidden:document.querySelector('#load-older').hidden};})()`);
+    if(pagedHistory.cards!==124||pagedHistory.first!==store.data.messages[0].id)throw Error('Paged history UI older records were lost');
+    if(!pagedHistory.olderHidden)throw Error('Completed remote pagination still offers older records');
+    console.log('HISTORY_INCREMENTAL_PAGES_LOCAL_METADATA_OK',JSON.stringify({initialPage,pageRequests,turns:synthetic.turns,cards:pagedHistory.cards}));store.save();
     await panel.webContents.executeJavaScript(`(async()=>{document.querySelector('[data-tab="history"]').click();await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));})()`);
-    fs.writeFileSync(path.join(__dirname,'..','artifacts','alpha-history.png'),(await panel.webContents.capturePage()).toPNG());
-    fs.writeFileSync(path.join(__dirname,'..','artifacts','history-ui-smoke.json'),JSON.stringify({verifiedAt:new Date().toISOString(),status:'passed',result,lockedRejected,resumedTurns:remote.thread.turns.length},null,2));
+    fs.writeFileSync(path.join(artifactRoot,'alpha-history.png'),(await panel.webContents.capturePage()).toPNG());
+    fs.writeFileSync(path.join(artifactRoot,'history-ui-smoke.json'),JSON.stringify({verifiedAt:new Date().toISOString(),status:'passed',result,lockedRejected,resumedTurns:remote.thread.turns.length,pagedHistory:{...pagedHistory,initialPage,pageRequests,turns:synthetic.turns},realModel:false},null,2));
     console.log('HISTORY_UI_SEARCH_RESUME_ISOLATION_OK',JSON.stringify({...result,lockedRejected}));app.quit();
   } catch(error) {console.error('HISTORY_UI_SMOKE_FAILED',error);codex.stop();app.exit(1);}
 };

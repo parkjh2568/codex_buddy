@@ -35,6 +35,55 @@ test('completion before login RPC, cancellation and disconnect clean up the same
   }finally{setup.dispose();}
 });
 
+test('authentication reads cannot restore an old account or overwrite a disconnected/disposed state',async()=>{
+  for(const change of ['logout','disconnect','dispose']){
+    const connection=new EventEmitter();connection.process={};let resolve;
+    connection.request=()=>new Promise(done=>{resolve=done;});const setup=new ConnectionSetup(connection);
+    try{
+      const pending=setup.check();
+      if(change==='logout')connection.emit('notification',{method:'account/updated',params:{authMode:null}});
+      else if(change==='disconnect')connection.emit('disconnected');else setup.dispose();
+      const state=setup.state,features={...setup.diagnostics.features};resolve({requiresOpenaiAuth:true,account:{type:'chatgpt'}});
+      await pending;assert.equal(setup.state,state,change);assert.deepEqual(setup.diagnostics.features,features,change);
+    }finally{setup.dispose();}
+  }
+});
+
+test('a fresh authentication read can start after reconnect and an old error cannot clear its ownership',async()=>{
+  const connection=new EventEmitter();connection.process={};const requests=[];
+  connection.request=()=>new Promise((resolve,reject)=>requests.push({resolve,reject}));const setup=new ConnectionSetup(connection);let first,second;
+  try{
+    first=setup.check();connection.emit('disconnected');connection.process={};second=setup.check();
+    assert.equal(requests.length,2);const checking=setup.checking,state=setup.state;
+    requests[0].reject(Error('old connection failure'));await first;assert.equal(setup.checking,checking);assert.equal(setup.state,state);
+    requests[1].resolve({requiresOpenaiAuth:false,account:null});await second;assert.equal(setup.state.phase,'ready');assert.equal(setup.state.authMode,'external');assert.equal(setup.checking,null);
+  }finally{for(const request of requests)request.resolve({requiresOpenaiAuth:false,account:null});await Promise.allSettled([first,second]);setup.dispose();}
+});
+
+test('login cannot start from an authentication read invalidated while awaiting its result',async()=>{
+  const connection=new EventEmitter();connection.process={};let resolve,starts=0,opened=0;
+  connection.request=method=>method==='account/read'?new Promise(done=>{resolve=done;}):method==='account/login/start'?(starts++,Promise.resolve({type:'chatgpt',loginId:'unexpected',authUrl:'https://auth.openai.com/authorize'})):Promise.resolve({});
+  const setup=new ConnectionSetup(connection,{openExternal:async()=>{opened++;}});
+  try{const pending=setup.startLogin();connection.emit('disconnected');resolve({requiresOpenaiAuth:true,account:null});await pending;assert.equal(starts,0);assert.equal(opened,0);assert.equal(setup.attempt,null);assert.equal(setup.state.phase,'error');}
+  finally{setup.dispose();}
+});
+
+test('login completion retries an account change once and never emits authentication from a stale retry',async()=>{
+  for(const secondChange of [false,true]){
+    const connection=new EventEmitter();connection.process={};const reads=[];let validating=false,authenticated=0;
+    connection.request=method=>method==='account/read'?(validating?new Promise(resolve=>reads.push(resolve)):Promise.resolve({requiresOpenaiAuth:true,account:null})):Promise.resolve({type:'chatgpt',loginId:'owned-login',authUrl:'https://auth.openai.com/authorize'});
+    const setup=new ConnectionSetup(connection,{openExternal:async()=>{}});setup.on('authenticated',()=>authenticated++);
+    try{
+      await setup.startLogin();validating=true;const pending=setup.completeLogin(setup.attempt,{loginId:'owned-login',success:true});
+      connection.emit('notification',{method:'account/updated',params:{authMode:'chatgpt'}});reads[0]({requiresOpenaiAuth:true,account:{type:'chatgpt'}});
+      for(let i=0;i<10&&reads.length<2;i++)await Promise.resolve();assert.equal(reads.length,2);
+      if(secondChange)connection.emit('notification',{method:'account/updated',params:{authMode:'chatgpt'}});
+      reads[1]({requiresOpenaiAuth:true,account:{type:'chatgpt'}});await pending;
+      assert.equal(reads.length,2);assert.equal(authenticated,secondChange?0:1);assert.equal(setup.state.phase,secondChange?'idle':'ready');
+    }finally{setup.dispose();}
+  }
+});
+
 test('native/MCP images become bounded owned references, deduplicate and survive Store reload',async t=>{
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'onggi-images-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));let decodes=0;
   const library=new ResponseImages(path.join(root,'images'),{validate:async p=>{decodes++;p.thumbnail=p.imageFiles[0].source;return p;}});
@@ -100,6 +149,35 @@ test('newer quota events survive both stale read responses and stale read errors
   }finally{setup.dispose();}
 });
 
+test('a quota event preserves its bucket while the pending full read supplies the other buckets',async t=>{
+  const connection=new EventEmitter();connection.process={};let resolve,clock=1000;t.mock.method(Date,'now',()=>clock);
+  connection.request=()=>new Promise(done=>{resolve=done;});const setup=new ConnectionSetup(connection);
+  try{
+    const pending=setup.readUsage();clock=2000;connection.emit('notification',{method:'account/rateLimits/updated',params:{rateLimits:{limitId:'codex',primary:{usedPercent:31}}}});
+    clock=3000;resolve({rateLimitsByLimitId:{codex:{limitId:'codex',primary:{usedPercent:23}},image:{limitId:'image',primary:{usedPercent:40}}}});await pending;
+    assert.equal(setup.usage.buckets.find(item=>item.id==='codex').primary.usedPercent,31);assert.equal(setup.usage.buckets.find(item=>item.id==='image').primary.usedPercent,40);
+    assert.equal(setup.usage.buckets.find(item=>item.id==='codex').checkedAt,2000);assert.equal(setup.usage.buckets.find(item=>item.id==='image').checkedAt,1000);assert.equal(setup.usage.checkedAt,1000);assert.equal(setup.usageRead,null);
+    const older=setup.readUsage();connection.emit('notification',{method:'account/rateLimits/updated',params:{rateLimits:{limitId:'codex',primary:{usedPercent:32}}}});connection.emit('notification',{method:'account/updated',params:{authMode:null}});
+    resolve({rateLimitsByLimitId:{image:{primary:{usedPercent:45}}}});await older;assert.deepEqual(setup.usage.buckets,[]);
+  }finally{setup.dispose();}
+});
+
+test('quota event tracking stays bounded and uncertain data cannot restore an affected bucket',async()=>{
+  const connection=new EventEmitter();connection.process={};let resolve;connection.request=()=>new Promise(done=>{resolve=done;});const setup=new ConnectionSetup(connection);
+  try{
+    setup.updateUsage({rateLimits:{limitId:'codex',primary:{usedPercent:31}}});const pending=setup.readUsage();
+    connection.emit('notification',{method:'account/rateLimits/updated',params:{rateLimits:{limitId:'codex',primary:null,secondary:null}}});
+    resolve({rateLimitsByLimitId:{codex:{primary:{usedPercent:23}},image:{primary:{usedPercent:40}}}});await pending;assert.equal(setup.usage.status,'stale');assert.equal(setup.usage.buckets.find(item=>item.id==='codex').primary.usedPercent,31);assert.equal(setup.usage.buckets.find(item=>item.id==='image').primary.usedPercent,40);
+    const many=setup.readUsage();for(let index=0;index<17;index++)connection.emit('notification',{method:'account/rateLimits/updated',params:{rateLimits:{limitId:'bucket-'+index,primary:{usedPercent:index}}}});
+    assert.equal(setup.usageRead.updatedIds.size,16);assert.equal(setup.usageRead.allChanged,true);const latest=setup.usage;
+    resolve({rateLimits:{limitId:'old-bucket',primary:{usedPercent:99}}});await many;assert.equal(setup.usage,latest);assert.equal(setup.usage.buckets.length,16);
+    const nodes=new Map([['#refresh-usage',{}],['#usage-status',{}]]),source=fs.readFileSync(path.join(__dirname,'../src/ui/renderer.mjs'),'utf8'),vm=require('node:vm');
+    const context=vm.createContext({state:{accountUsage:{...setup.usage,status:'stale'},usageLoading:false},document:{querySelector:id=>nodes.get(id)}});
+    vm.runInContext(source.split('\n').find(line=>line.trim().startsWith('const usage=state.accountUsage'))+'\n'+source.split('\n').find(line=>line.includes("document.querySelector('#usage-status').textContent=")),context);
+    assert.doesNotMatch(nodes.get('#usage-status').textContent,/연결이 끊/);assert.match(nodes.get('#usage-status').textContent,/다시 확인/);
+  }finally{setup.dispose();}
+});
+
 test('real-mode probe reports response and cleanup outcomes independently without masking failures',async t=>{
   const vm=require('node:vm'),root=fs.mkdtempSync(path.join(os.tmpdir(),'onggi-probe-outcomes-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
   const source=fs.readFileSync(path.join(__dirname,'../scripts/real-buddy-modes-smoke.cjs'),'utf8');
@@ -126,4 +204,73 @@ test('real-mode probe reports response and cleanup outcomes independently withou
     assert.equal(result.responsePassed,mode!=='response-failure');assert.equal(result.cleanupPassed,mode!=='cleanup-failure');assert.equal(result.passed,mode==='success');assert.equal(process.exitCode,mode==='success'?0:1);
     assert.deepEqual(removed,mode==='response-failure'?['probe-1']:['probe-1','probe-2']);
   }
+});
+
+test('usage reads coalesce within their owner and do not block or clear a newer account/process read',async()=>{
+  for(const change of ['process','account','disconnect'])for(const order of ['old-first','new-first'])for(const oldError of [false,true]){
+    const connection=new EventEmitter();connection.process={};const requests=[];
+    connection.request=()=>new Promise((resolve,reject)=>requests.push({resolve,reject}));const setup=new ConnectionSetup(connection);
+    try{
+      const first=setup.readUsage(),duplicate=setup.readUsage();assert.equal(requests.length,1);
+      if(change==='process')connection.process={};
+      if(change==='account')connection.emit('notification',{method:'account/updated',params:{authMode:'chatgpt'}});
+      if(change==='disconnect'){connection.emit('disconnected');connection.process={};}
+      const second=setup.readUsage();assert.equal(requests.length,2);const owner=setup.usageWork;
+      const old=()=>oldError?requests[0].reject(Error('old read failed')):requests[0].resolve({rateLimits:{primary:{usedPercent:99}}});
+      if(order==='old-first'){old();await first;assert.equal(setup.usageWork,owner);assert.equal(setup.usageRead,owner);}
+      connection.emit('notification',{method:'account/rateLimits/updated',params:{rateLimits:{limitId:'image',primary:{usedPercent:12}}}});
+      requests[1].resolve({rateLimitsByLimitId:{codex:{primary:{usedPercent:25}},image:{limitId:'image',primary:{usedPercent:98}}}});await second;
+      if(order==='new-first'){old();await first;}
+      await duplicate;assert.equal(setup.usageWork,null);assert.equal(setup.usageRead,null);assert.equal(setup.usage.buckets.find(item=>item.id==='codex').primary.usedPercent,25);assert.equal(setup.usage.buckets.find(item=>item.id==='image').primary.usedPercent,12);
+    }finally{for(const request of requests)request.resolve({});setup.dispose();}
+  }
+});
+
+test('concurrent image commits enforce the shared cache budget and deduplicate identical images',async t=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'onggi-image-budget-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+  const library=new ResponseImages(path.join(root,'images'),{validate:async candidate=>{candidate.thumbnail=candidate.imageFiles[0].source;}});
+  const padding=path.join(library.root,'padding'),descriptor=fs.openSync(padding,'wx');try{fs.ftruncateSync(descriptor,512*1024*1024-png.length-1);}finally{fs.closeSync(descriptor);}
+  const different=Buffer.from(png);different[different.length-1]^=1;
+  let release,entered;const blocked=new Promise(resolve=>{entered=resolve;}),write=fs.promises.writeFile;
+  t.mock.method(fs.promises,'writeFile',async(...args)=>{if(!release){await new Promise(resolve=>{release=resolve;entered();});}return write(...args);});
+  const first=library.capture({type:'imageGeneration',id:'first',status:'completed',result:png.toString('base64')});await blocked;
+  const second=library.capture({type:'imageGeneration',id:'second',status:'completed',result:different.toString('base64')});release();
+  const results=(await Promise.all([first,second])).flat();assert.deepEqual(results.map(item=>item.status),['ready','failed']);assert.match(results[1].error,/512MiB/);
+  const used=fs.readdirSync(library.root).reduce((sum,file)=>sum+fs.statSync(path.join(library.root,file)).size,0);assert.ok(used<=512*1024*1024);assert.equal(library.saveWork,null);
+  const repeated=(await Promise.all([library.capture({type:'imageGeneration',id:'same-1',status:'completed',result:png.toString('base64')}),library.capture({type:'imageGeneration',id:'same-2',status:'completed',result:png.toString('base64')})])).flat();assert.ok(repeated.every(item=>item.status==='ready'));assert.equal(fs.readdirSync(library.root).length,2);
+  const paddingDescriptor=fs.openSync(padding,'r+');try{fs.ftruncateSync(paddingDescriptor,512*1024*1024);}finally{fs.closeSync(paddingDescriptor);}
+  assert.equal((await library.capture({type:'imageGeneration',id:'existing-over-budget',status:'completed',result:png.toString('base64')}))[0].status,'ready');
+});
+
+test('image commit failures release waiting captures and clean temporary files',async t=>{
+  const write=fs.promises.writeFile;
+  for(const failedWrite of [1,2]){
+    const root=fs.mkdtempSync(path.join(os.tmpdir(),'onggi-image-write-failure-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+    const preview=Buffer.from(png);preview[preview.length-1]^=1;
+    const library=new ResponseImages(root,{validate:async candidate=>{candidate.thumbnail='data:image/png;base64,'+preview.toString('base64');}});
+    let writes=0;const mock=t.mock.method(fs.promises,'writeFile',async(...args)=>{await write(...args);if(++writes===failedWrite)throw Error('fixture disk full');});
+    try{
+      const results=(await Promise.all([library.capture({type:'imageGeneration',id:'failed',status:'completed',result:png.toString('base64')}),library.capture({type:'imageGeneration',id:'next',status:'completed',result:png.toString('base64')})])).flat();
+      assert.deepEqual(results.map(item=>item.status),['failed','ready']);assert.equal(library.saveWork,null);assert.equal(fs.readdirSync(root).length,2);assert.ok(library.read(results[1]).bytes.equals(png));
+    }finally{mock.mock.restore();}
+  }
+});
+
+test('corrupt stored image/attachment/skill identifiers fail closed while original text and valid references survive',async t=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'onggi-stored-id-types-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+  const images=new ResponseImages(path.join(root,'images'),{validate:async candidate=>{candidate.thumbnail=candidate.imageFiles[0].source;}}),[image]=await images.capture({type:'imageGeneration',id:'owned',status:'completed',result:png.toString('base64')});assert.equal(image.status,'ready');
+  const {AttachmentStore}=require('../src/attachments.cjs'),attachments=new AttachmentStore(path.join(root,'attachments'),images),source=path.join(root,'note.txt');fs.writeFileSync(source,'note');const [attachment]=await attachments.import([source]);
+  const store=new Store(path.join(root,'store'),{demo:true});
+  for(const field of ['id','previewId']){
+    const invalid={...image,[field]:[image[field]]};store.data.messages=[{id:'reply',role:'assistant',text:'keep response',status:'completed',images:[invalid,image]}];store.save();
+    const restored=store.readHistory(store.data.activeConversationId);assert.equal(restored.messages[0].text,'keep response');assert.equal(restored.messages[0].images[0].status,'failed');assert.equal(restored.messages[0].images[1].status,'ready');
+  }
+  for(const field of ['id','hash','extension']){
+    store.data.messages=[{id:'question',role:'user',text:'keep question',status:'completed',attachments:[{...attachment,[field]:[attachment[field]]},attachment],skill:{name:'fixture',path:source,hash:[attachment.hash]}}];store.save();
+    const restored=store.readHistory(store.data.activeConversationId);assert.equal(restored.messages[0].text,'keep question');assert.equal(restored.messages[0].attachments.length,1);assert.equal(restored.messages[0].attachments[0].id,attachment.id);assert.equal(restored.messages[0].skill,undefined);
+  }
+  const imageAttachment={...attachment,kind:'image',mime:'image/png',width:2,height:2,hash:image.id,previewId:[image.previewId]};store.data.messages=[{id:'image-question',role:'user',text:'preserve image question',status:'completed',attachments:[imageAttachment]}];store.save();assert.equal(store.readHistory(store.data.activeConversationId).messages[0].attachments.length,0);
+  assert.throws(()=>store.readHistory([store.data.activeConversationId]),/ID/);assert.throws(()=>images.read({id:[image.id],mime:image.mime}),/정보/);
+  assert.throws(()=>attachments.read({...attachment,hash:[attachment.hash]}),/정보/);assert.throws(()=>attachments.read({...attachment,extension:[attachment.extension]}),/경로/);
+  assert.ok(fs.readFileSync(source).equals(Buffer.from('note')));assert.ok(images.read(image).bytes.equals(png));
 });

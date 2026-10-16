@@ -1,6 +1,8 @@
 const fs=require('node:fs');const path=require('node:path');const {Store}=require('../src/store.cjs');
 module.exports=async({app,panel,store,codex})=>{
+  const originalRequest=codex.request;let busyEscapePreserved=false;
   try{
+    const artifactRoot=path.resolve(process.env.ONGGI_SMOKE_ROOT??path.join(__dirname,'..','artifacts'));fs.mkdirSync(artifactRoot,{recursive:true});
     await panel.webContents.executeJavaScript(`(async()=>{await window.onggi.action('refresh-models');await window.onggi.action('send',{text:'삭제 검증 첫 대화'});})()`);
     for(let i=0;i<200&&(store.data.messages.at(-1)?.status!=='completed'||store.saving||await panel.webContents.executeJavaScript(`document.querySelector('#new-chat').disabled`));i++)await new Promise(r=>setTimeout(r,25));
     const first=store.data.activeConversationId,firstThread=store.data.threadId;
@@ -8,6 +10,18 @@ module.exports=async({app,panel,store,codex})=>{
     let busyRejected=false;try{await panel.webContents.executeJavaScript(`window.onggi.action('delete-conversation',{id:${JSON.stringify(first)},confirmed:true})`);}catch(e){busyRejected=e.message.includes('진행 중인');}
     for(let i=0;i<200&&(store.data.messages.at(-1)?.status!=='completed'||store.saving||await panel.webContents.executeJavaScript(`document.querySelector('#new-chat').disabled`));i++)await new Promise(r=>setTimeout(r,25));
     const second=store.data.activeConversationId,secondThread=store.data.threadId;
+    codex.request=async function(method,params,...args){
+      if(method==='thread/delete'&&params.threadId===secondThread){
+        panel.webContents.debugger.attach('1.3');
+        try{
+          await panel.webContents.debugger.sendCommand('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',code:'Escape',windowsVirtualKeyCode:27});
+          await panel.webContents.debugger.sendCommand('Input.dispatchKeyEvent',{type:'keyUp',key:'Escape',code:'Escape',windowsVirtualKeyCode:27});
+          busyEscapePreserved=await panel.webContents.executeJavaScript(`new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve(document.querySelector('#delete-dialog').open&&document.querySelector('#delete-confirm').disabled))))`);
+          if(!busyEscapePreserved||!panel.isVisible())throw Error('Escape closed a deletion dialog or panel while deletion was pending');
+        }finally{panel.webContents.debugger.detach();}
+      }
+      return originalRequest.call(this,method,params,...args);
+    };
     const ui=await panel.webContents.executeJavaScript(`(async()=>{
       document.querySelector('[data-tab="history"]').click();let deadline=Date.now()+5000;while(Date.now()<deadline&&(document.querySelectorAll('.conversation-delete').length!==2||document.querySelector('.conversation-delete').disabled))await new Promise(r=>setTimeout(r,25));
       document.querySelector('[data-delete-conversation="${first}"]').click();
@@ -17,6 +31,7 @@ module.exports=async({app,panel,store,codex})=>{
       deadline=Date.now()+10000;while(Date.now()<deadline&&document.querySelector('[data-delete-conversation="${second}"]'))await new Promise(r=>setTimeout(r,25));
       return{opened,defaultCancel,cancelled,remaining:document.querySelectorAll('.conversation-card').length};
     })()`);
+    codex.request=originalRequest;
     if(!busyRejected||!ui.opened||!ui.defaultCancel||!ui.cancelled||ui.remaining!==1||store.data.activeConversationId!==null||store.data.messages.length!==0||fs.existsSync(path.join(store.historyDirectory,second+'.json')))throw new Error('Delete UI or active reset failed '+JSON.stringify(ui));
     await codex.connect(store.data.settings.codexPath,store.data.settings.workspace);
     await codex.request('thread/read',{threadId:firstThread,includeTurns:true});
@@ -46,9 +61,9 @@ module.exports=async({app,panel,store,codex})=>{
     })()`);
     if(!retry.closed||!retry.foreignRejected||!retry.confirmationRequired||store.pendingDeletion||store.data.activeConversationId!==third||store.data.threadId!==thirdThread||fs.existsSync(path.join(store.historyDirectory,first+'.json')))throw new Error('Retry or unrelated conversation preservation failed');
     const persisted=new Store(store.directory,{});if(persisted.data.conversations.length!==1||persisted.data.activeConversationId!==third)throw new Error('Deleted conversations returned after restart');
-    const result={ui,busyRejected,remoteGone,cliFailurePreserved:true,alreadyMissingHandled:true,retry,unrelatedPreserved:true,restartVerified:true};
-    fs.writeFileSync(path.join(__dirname,'..','artifacts','alpha-delete-history.png'),(await panel.webContents.capturePage()).toPNG());
-    fs.writeFileSync(path.join(__dirname,'..','artifacts','deletion-ui-smoke.json'),JSON.stringify({verifiedAt:new Date().toISOString(),status:'passed',result},null,2));
+    const result={ui,busyRejected,busyEscapePreserved,remoteGone,cliFailurePreserved:true,alreadyMissingHandled:true,retry,unrelatedPreserved:true,restartVerified:true};
+    fs.writeFileSync(path.join(artifactRoot,'alpha-delete-history.png'),(await panel.webContents.capturePage()).toPNG());
+    fs.writeFileSync(path.join(artifactRoot,'deletion-ui-smoke.json'),JSON.stringify({verifiedAt:new Date().toISOString(),status:'passed',result},null,2));
     console.log('OWNED_HISTORY_AND_CLI_DELETE_OK',JSON.stringify(result));app.quit();
-  }catch(error){console.error('DELETE_UI_SMOKE_FAILED',error);codex.stop();app.exit(1);}
+  }catch(error){console.error('DELETE_UI_SMOKE_FAILED',error);codex.stop();app.exit(1);}finally{codex.request=originalRequest;}
 };

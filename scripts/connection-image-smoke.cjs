@@ -4,6 +4,8 @@ module.exports=async({app,panel,store,codex,shell,responseImages,publish,getRunt
   shell.openExternal=async uri=>{assert.equal(new URL(uri).hostname,'auth.openai.com');opened++;};shell.openPath=async file=>{openedPath=file;return'';};
   try{
     let deadline=Date.now()+10000;while(Date.now()<deadline&&getRuntime().setup.phase!=='login-required')await new Promise(r=>setTimeout(r,30));assert.equal(getRuntime().setup.phase,'login-required');
+    deadline=Date.now()+5000;while(Date.now()<deadline&&!await panel.webContents.executeJavaScript(`(()=>{const button=document.querySelector('#login-chatgpt');return !button.hidden&&!button.disabled;})()`))await new Promise(r=>setTimeout(r,30));
+    assert.equal(await panel.webContents.executeJavaScript(`(()=>{const button=document.querySelector('#login-chatgpt');return !button.hidden&&!button.disabled;})()`),true);
     await panel.webContents.executeJavaScript(`document.querySelector('#login-chatgpt').click()`);deadline=Date.now()+5000;while(Date.now()<deadline&&!opened)await new Promise(r=>setTimeout(r,30));assert.equal(opened,1);
     await codex.request('test/complete-login',{});deadline=Date.now()+10000;while(Date.now()<deadline&&(getRuntime().setup.phase!=='ready'||getRuntime().connectionState!=='connected'))await new Promise(r=>setTimeout(r,30));assert.equal(getRuntime().setup.phase,'ready');
     await panel.webContents.executeJavaScript(`window.onggi.action('send',{text:'fixture 이미지'})`);deadline=Date.now()+10000;

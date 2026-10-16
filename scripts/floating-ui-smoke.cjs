@@ -2,11 +2,14 @@ const fs = require('node:fs');
 const path = require('node:path');
 module.exports = async ({app,pet,panel,screen,store,getAnchor,getIgnoring}) => {
   try {
+    const artifactRoot=path.resolve(process.env.ONGGI_SMOKE_ROOT??path.join(__dirname,'..','artifacts'));fs.mkdirSync(artifactRoot,{recursive:true});
     await new Promise(resolve=>setTimeout(resolve,500));
-    const artifact = path.join(__dirname,'..','artifacts','floating-ui-smoke.json');
+    const artifact = path.join(artifactRoot,'floating-ui-smoke.json');
     const area = screen.getPrimaryDisplay().workArea, display = screen.getPrimaryDisplay().bounds;
+    if((process.argv.includes('--verify-floating-restore')||process.argv.includes('--verify-floating-recovery'))&&!process.env.ONGGI_SMOKE_ROOT)throw Error('재시작 검사는 처음 검사와 같은 ONGGI_SMOKE_ROOT를 명시해주세요.');
     if (process.argv.includes('--verify-floating-restore')) {
       const result=JSON.parse(fs.readFileSync(artifact,'utf8')), anchor=getAnchor();
+      if(result.profileDirectory!==store.directory||result.status!=='passed')throw Error('재시작 확인 자료와 현재 검사 프로필이 일치하지 않습니다.');
       if(Math.abs(anchor.x-result.savedPartial.x-result.savedPartial.width/2)>.5||Math.abs(anchor.y-result.savedPartial.y-result.savedPartial.height)>.5)throw new Error('Partially off-screen character position was clamped on restart '+JSON.stringify({anchor,saved:result.savedPartial}));
       result.restartPreserved=true;
       store.data.settings.position={x:90000,y:90000,width:120,height:143};store.save({includeHistory:false});
@@ -14,6 +17,7 @@ module.exports = async ({app,pet,panel,screen,store,getAnchor,getIgnoring}) => {
     }
     if (process.argv.includes('--verify-floating-recovery')) {
       const result=JSON.parse(fs.readFileSync(artifact,'utf8')), anchor=getAnchor();
+      if(result.profileDirectory!==store.directory||result.status!=='passed'||result.restartPreserved!==true)throw Error('같은 검사 프로필의 위치 복원 확인을 먼저 완료해주세요.');
       if(anchor.x<area.x||anchor.x>area.x+area.width||anchor.y<area.y||anchor.y>area.y+area.height)throw new Error('Unreachable saved position was not recovered');
       result.unreachableRestartRecovered=true;
       fs.writeFileSync(artifact,JSON.stringify(result,null,2));console.log('FLOATING_RESTART_RECOVERY_OK');app.quit();return;
@@ -87,7 +91,7 @@ module.exports = async ({app,pet,panel,screen,store,getAnchor,getIgnoring}) => {
       await window.onggi.action('drag-end');
     })()`);
     const savedPartial=pet.getBounds();
-    const result={verifiedAt:new Date().toISOString(),platform:process.platform,status:'passed',properties,initial,moved,top,partial,expanded,anchorPreserved:true,externalMoveSynchronized:true,reset,hit,fullyOffScreenAllowed:true,savedPartial,restartPreserved:false,unreachableRestartRecovered:false,windowsNativeVerified:process.platform==='win32'};
+    const result={verifiedAt:new Date().toISOString(),platform:process.platform,profileDirectory:store.directory,status:'passed',properties,initial,moved,top,partial,expanded,anchorPreserved:true,externalMoveSynchronized:true,reset,hit,fullyOffScreenAllowed:true,savedPartial,restartPreserved:false,unreachableRestartRecovered:false,windowsNativeVerified:process.platform==='win32'};
     fs.writeFileSync(artifact,JSON.stringify(result,null,2));console.log('FLOATING_UI_OK',JSON.stringify(result));app.quit();
   } catch(error) {console.error(error.stack);app.exit(1);}
 };

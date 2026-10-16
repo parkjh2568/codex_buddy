@@ -13,7 +13,7 @@ class AssetValidator {
       const decode = (async()=>{
         await window.loadFile(path.join(__dirname,'ui/validate-images.html'));
         return window.webContents.executeJavaScript(`(async()=>{
-          const results=[];
+          const results=[];let pixels=0;
           for(const entry of ${JSON.stringify(pack.imageFiles)}) {
             let bitmap,image;
             try {
@@ -32,6 +32,8 @@ class AssetValidator {
               }
               const width=bitmap?.width??image.naturalWidth,height=bitmap?.height??image.naturalHeight;
               if(width<1||height<1||width>${maxDimension}||height>${maxDimension}||(entry.width!==null&&(width!==entry.width||height!==entry.height)))throw Error('이미지 decode 크기가 올바르지 않습니다.');
+              pixels+=width*height*(entry.frameCount??1);
+              if(pixels>${maxPixels})throw Error('decode 이미지 픽셀 예산을 초과했습니다.');
               let poster,thumbnail,errorThumbnail;
               if(entry.animated){const canvas=document.createElement('canvas'),scale=Math.min(1,512/width,512/height);canvas.width=Math.max(1,Math.round(width*scale));canvas.height=Math.max(1,Math.round(height*scale));canvas.getContext('2d').drawImage(bitmap,0,0,canvas.width,canvas.height);poster=canvas.toDataURL('image/png');}
               if(entry.file===${JSON.stringify(pack.manifest.states.idle)}){const c=document.createElement('canvas'),size=${thumbnailSize},scale=Math.min(1,size/width,size/height);c.width=Math.max(1,Math.round(width*scale));c.height=Math.max(1,Math.round(height*scale));if(size===96){c.width=96;c.height=96;const s=Math.min(88/width,88/height);c.getContext('2d').drawImage(bitmap??image,(96-width*s)/2,(96-height*s)/2,width*s,height*s);}else c.getContext('2d').drawImage(bitmap??image,0,0,c.width,c.height);thumbnail=c.toDataURL('image/png');}
@@ -53,7 +55,6 @@ class AssetValidator {
         for (const state of Object.keys(pack.assets)) if(pack.assets[state]===original)pack.assets[state]=result.poster;
         pack.animationFrames=pack.animationFrames.map(source=>source===original?result.poster:source);
       }
-      if(results.reduce((sum,result)=>sum+result.width*result.height*(pack.imageFiles.find(item=>item.file===result.file).frameCount??1),0)>maxPixels)throw Error('decode 이미지 픽셀 예산을 초과했습니다.');
       pack.thumbnail=results.find(item=>item.thumbnail)?.thumbnail;
       pack.errorThumbnail=results.find(item=>item.errorThumbnail)?.errorThumbnail;
       pack.decodedImages=results.map(({file,width,height})=>({file,width,height}));

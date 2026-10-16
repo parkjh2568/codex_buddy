@@ -3,6 +3,7 @@ const path=require('node:path');
 module.exports=async({app,panel,store,codex,modelCatalog})=>{
   panel.webContents.on('console-message',details=>{if(details.level==='error')console.error('MODEL_RENDERER_ERROR',details.message);});
   try{
+    const artifactRoot=path.resolve(process.env.ONGGI_SMOKE_ROOT??path.join(__dirname,'..','artifacts'));fs.mkdirSync(artifactRoot,{recursive:true});
     const result=await panel.webContents.executeJavaScript(`(async()=>{
       await window.onggi.action('refresh-models');
       await window.onggi.action('model-settings',{model:'test-main',effort:'low'});
@@ -75,9 +76,9 @@ module.exports=async({app,panel,store,codex,modelCatalog})=>{
     result.focusedRefresh=focusedRefresh;
     const dismissal=await panel.webContents.executeJavaScript(`(()=>{const popup=document.querySelector('#model-popover');if(!popup.matches(':popover-open'))popup.showPopover();document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));return{closed:!popup.matches(':popover-open'),chatVisible:!document.querySelector('#chat-tab').hidden,focusReturned:document.activeElement===document.querySelector('#model-menu-toggle')};})()`);
     if(!dismissal.closed||!dismissal.chatVisible||!dismissal.focusReturned)throw Error('Model popup dismissal failed '+JSON.stringify(dismissal));result.dismissal=dismissal;
-    fs.mkdirSync(path.join(__dirname,'..','artifacts'),{recursive:true});
-    fs.writeFileSync(path.join(__dirname,'..','artifacts','model-ui-smoke.json'),JSON.stringify({verifiedAt:new Date().toISOString(),status:'passed',result,expected},null,2));
-    fs.writeFileSync(path.join(__dirname,'..','artifacts','alpha-models.png'),(await panel.webContents.capturePage()).toPNG());
+
+    fs.writeFileSync(path.join(artifactRoot,'alpha-models.png'),(await panel.webContents.capturePage()).toPNG());
+    fs.writeFileSync(path.join(artifactRoot,'model-ui-smoke.json'),JSON.stringify({verifiedAt:new Date().toISOString(),status:'passed',result,expected},null,2));
     console.log('MODEL_UI_QUEUE_SWITCH_OK',JSON.stringify(result));app.quit();
   }catch(error){console.error('MODEL_UI_SMOKE_FAILED',error);codex.stop();app.exit(1);}
 };

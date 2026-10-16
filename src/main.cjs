@@ -16,6 +16,7 @@ const {loadSkins}=require('./skins.cjs');
 const {ConnectionSetup}=require('./connection-setup.cjs');
 const {ResponseImages}=require('./response-images.cjs');
 const {AttachmentStore}=require('./attachments.cjs');
+const {StorageMaintenance}=require('./storage-maintenance.cjs');
 let NativeNotification=require('electron').Notification;
 
 const nativeNoticeReview=process.argv.includes('--native-notification-review')&&process.env.ONGGI_NATIVE_NOTICE_REVIEW==='1'&&path.isAbsolute(process.env.ONGGI_SMOKE_ROOT??'');
@@ -37,6 +38,8 @@ const stabilitySmoke = !app.isPackaged && process.argv.includes('--stability-smo
 const resourceSmoke = !app.isPackaged && process.argv.includes('--resource-smoke');
 const lifecycleSmoke = !app.isPackaged && process.argv.includes('--buddy-lifecycle-smoke');
 const connectionImageSmoke=!app.isPackaged&&process.argv.includes('--connection-image-smoke');
+const chatUISmoke=!app.isPackaged&&process.argv.includes('--chat-ui-smoke');
+if(chatUISmoke)app.setPath('userData',path.join(path.resolve(process.env.ONGGI_SMOKE_ROOT??path.join(__dirname,'..','artifacts')),'chat-ui-profile'));
 if(connectionImageSmoke)app.setPath('userData',path.join(__dirname,'..','artifacts','connection-image-profile'));
 if(lifecycleSmoke)app.setPath('userData',path.join(__dirname,'..','artifacts','buddy-lifecycle-profile'));
 if (smoke || realSmoke || modelSmoke || historySmoke || petPointerSmoke || timingSmoke || performanceSmoke || deleteSmoke || floatingSmoke || buddyFeatureSmoke || stabilitySmoke || resourceSmoke) app.setPath('userData', path.join(__dirname, '..', 'artifacts', resourceSmoke ? 'resource-smoke-profile' : stabilitySmoke ? 'stability-smoke-profile' : buddyFeatureSmoke ? 'buddy-features-profile' : floatingSmoke ? 'floating-smoke-profile' : deleteSmoke ? 'delete-smoke-profile' : performanceSmoke ? 'performance-smoke-profile' : timingSmoke ? 'timing-smoke-profile' : petPointerSmoke ? 'pet-pointer-smoke-profile' : historySmoke ? 'history-smoke-profile' : modelSmoke ? 'model-smoke-profile' : realSmoke ? 'real-smoke-profile' : 'smoke-profile'));
@@ -52,7 +55,7 @@ const assetValidator = new AssetValidator();
 const modelCatalog = new ModelCatalog(codex);
 const connectionSetup=new ConnectionSetup(codex,{openExternal:url=>shell.openExternal(url)});
 let connectionIssue=null,reconnectTimer,reconnectAttempted=false,connectionProbe,responseImages;
-let attachmentStore,attachmentPicking=false;
+let attachmentStore,attachmentPicking=false,storageMaintenance,storageBusy=false,storageRevision=0;
 const pendingAttachments=new Map(),reservedAttachments=new Set();
 const queuePauses=new Set();let queueEdit=null,queueControlSaving=0;
 const noticeEvents=[],liveNotices=new Map(),seenNoticeIds=new Set();
@@ -61,13 +64,15 @@ connectionSetup.on('change',()=>{if(connectionSetup.state.phase==='login-require
 connectionSetup.on('authenticated',()=>{void refreshModels(false).catch(()=>{});});
 let modelsStatus = 'idle', modelsError = null, modelRefresh = null;
 let cliFileIdentity = null;
-let historyLoading = false, historyWarning = null, preparing = 0, packImporting = false;
+let historyLoading = false, historyWarning = null, preparing = 0, packImporting = false,historySearchRevision=0;
+let remoteHistory=null,historyRequest=null;
 let personaLibrary,personaCatalog=[],skins=[],packLibrary,packPreview=null,packArchiveCatalog=[];
 let petPointerTimer, petPointerSignature = '', petIgnoringMouse = true, petDrag = null;
 let petLayout = { bubbleVisible: false, controlsVisible: false, characterWidth: 75, characterHeight: 95 };
 let petAnchor, petPointerPosition, petWindowBounds, petPositioning = false;
 let noticeBelow=false,noticeHit=null,noticeIgnoringMouse=true,noticeHitRevision=0;
 let replyingUntil = 0, replyStateTimer;
+let simpleHideTimer,simpleHideDeadline=null,detailBounds=null,panelResize=null;
 let historyCatalogRevision = -1, historyCatalog = [];
 let admissionTail=Promise.resolve();
 let screenLocked = false, systemSuspended = false, onBattery = false;
@@ -75,7 +80,7 @@ let activeShortcut='CommandOrControl+Shift+Space';
 let skillsCatalog=[],skillsWorkspace=null,skillsLoading=false,skillsError=null,skillsRevision=0;
 
 const messageSizeCache = new WeakMap();
-const forcedDemo = nativeNoticeReview || lifecycleSmoke || resourceSmoke || stabilitySmoke || smoke || performanceSmoke || petPointerSmoke || floatingSmoke || process.argv.includes('--demo');
+const forcedDemo = chatUISmoke || nativeNoticeReview || lifecycleSmoke || resourceSmoke || stabilitySmoke || smoke || performanceSmoke || petPointerSmoke || floatingSmoke || process.argv.includes('--demo');
 
 function syncPetPointer() {
   if (!pet || quitting || screenLocked || systemSuspended || pet.isDestroyed() || !pet.rendererReady) return;
@@ -112,8 +117,9 @@ async function refreshModels(onlyIfStale = false) {
     if(!executable||path.isAbsolute(configured)&&path.resolve(configured)!==executable){connectionIssue={phase:'missing-cli',message:'Codex를 찾지 못했어요. 자동으로 다시 찾거나 설치 안내를 열어주세요.'};throw Error(connectionIssue.message);}
     connectionState='connecting';publish();await codex.connect(executable,store.data.settings.workspace);connectionState='connected';
     void connectionSetup.probeVersion(executable,store.data.settings.workspace).then(()=>publish()).catch(()=>{});
-    const account=await connectionSetup.check();
-    if(account.phase==='login-required'||account.phase==='login-pending')throw Error(account.message);
+    let account=await connectionSetup.check();
+    if(account.phase==='idle'&&codex.process&&!quitting)account=await connectionSetup.check();
+    if(!['ready','unknown'].includes(account.phase))throw Error(account.message);
     if (!cliChanged || restartAllowed) cliFileIdentity = identity;
     const result = await modelCatalog.refresh(store.data.settings.workspace);
     connectionState = 'connected'; modelsStatus = 'ready';reconnectAttempted=false; publish(); return result;
@@ -161,15 +167,39 @@ function publish(immediate = false) {
     if (historyCatalogRevision !== store.registryRevision) { historyCatalogRevision = store.registryRevision; historyCatalog = [...store.data.conversations].sort((a,b) => Number(b.pinned===true)-Number(a.pinned===true)||b.updatedAt-a.updatedAt); }
     const characterState = requests.length ? 'attention' : store.writeBlocked ? 'error' : current || preparing ? 'thinking' : listening ? 'listening' : Date.now() < replyingUntil ? 'replying' : sleeping ? 'sleeping' : unreadReply ? 'attention' : store.data.messages.at(-1)?.status === 'failed' ? 'error' : 'idle';
     const activityLabel = store.writeBlocked ? '답변 저장 확인 필요' : characterState === 'thinking' ? ({connecting:'Codex 연결 중…',preparing:'대화 준비 중…',waiting:'응답 기다리는 중…',receiving:'답변 받고 있어요…',generating:'그림을 만들고 있어요…',tool:'도구 실행 중…'}[current?.phase] ?? '생각 중이에요…') : null;
+    const simpleReply=current?(current.reply??store.data.messages.find(message=>message.id===current.replyId&&message.role==='assistant')):store.data.messages.findLast(message=>message.role==='assistant'&&message.status!=='queued'&&(message.status!=='interrupted'||message.text||message.images?.length||message.error));
+    if(panel&&!panel.isDestroyed()){
+      const version=JSON.stringify([simpleReply?.status,simpleReply?.images?.map(image=>[image.itemId,image.status,image.id,image.previewId])]);
+      const deliveredText=simpleReply?.status==='completed'?simpleReply.text:undefined;
+      if(panel.simpleConversationId!==store.data.activeConversationId||panel.simpleReplyId!==(simpleReply?.id??null)||panel.simpleReplyVersion!==version||panel.simpleReplyText!==deliveredText||panel.simpleReplyError!==simpleReply?.error){
+        clearTimeout(simpleHideTimer);simpleHideTimer=null;simpleHideDeadline=null;panel.simpleReady=false;panel.simpleDisplayGeneration=(panel.simpleDisplayGeneration??0)+1;
+        panel.simpleConversationId=store.data.activeConversationId;panel.simpleReplyId=simpleReply?.id??null;panel.simpleReplyVersion=version;panel.simpleReplyText=deliveredText;panel.simpleReplyError=simpleReply?.error;
+      }
+      panel.simpleProtected=Boolean(panel.simpleInputProtected||current||preparing||queue.length||requests.length||queueEdit||attachmentPicking||historyLoading||historyWarning||storageBusy||store.saving||store.writeBlocked||[...pendingAttachments.values()].some(record=>record.conversationId===store.data.activeConversationId));
+      const eligible=panel.compactMode&&panel.activeTab==='chat'&&panel.rendererReady&&panel.isVisible()&&!screenLocked&&!systemSuspended&&simpleReply?.status==='completed'&&!simpleReply.error&&!simpleReply.images?.some(image=>image.status==='pending')&&panel.simpleReady&&!panel.simpleProtected;
+      if(!eligible){clearTimeout(simpleHideTimer);simpleHideTimer=null;simpleHideDeadline=null;}
+      else if(simpleHideDeadline===null){
+        const owner=panel,generation=panel.simpleDisplayGeneration,renderGeneration=panel.renderGeneration,conversationId=store.data.activeConversationId,replyId=simpleReply.id;
+        const deadline=Date.now()+30000;simpleHideDeadline=deadline;
+        const reservation=setTimeout(()=>{
+          if(simpleHideTimer!==reservation||simpleHideDeadline!==deadline||panel!==owner||owner.isDestroyed()||!owner.rendererReady||owner.renderGeneration!==renderGeneration||owner.simpleDisplayGeneration!==generation||owner.simpleReplyId!==replyId||store.data.activeConversationId!==conversationId||!owner.compactMode||owner.activeTab!=='chat'||!owner.isVisible())return;
+          simpleHideTimer=null;simpleHideDeadline=null;
+          const reply=store.data.messages.find(message=>message.id===replyId&&message.role==='assistant');
+          if(quitting||screenLocked||systemSuspended||owner.simpleInputProtected||current||preparing||queue.length||requests.length||queueEdit||attachmentPicking||historyLoading||historyWarning||storageBusy||store.saving||store.writeBlocked||[...pendingAttachments.values()].some(record=>record.conversationId===conversationId)||reply?.status!=='completed'||reply.error||reply.images?.some(image=>image.status==='pending')){publish(true);return;}
+          owner.hide();listening=false;publish(true);
+        },30000);
+        simpleHideTimer=reservation;
+      }
+    }
     const state = {
-      settings: store.data.settings, messageTotal: store.data.messages.length, threadId: store.data.threadId, panelVisible:panelVisible&&!screenLocked&&!systemSuspended,queuePaused:queuePauses.size>0,queuePauseReasons:[...queuePauses],queueEdit:queueEdit?{id:queueEdit.id,token:queueEdit.token,saving:queueEdit.saving}:null,screenLocked,motionReduced:screenLocked||systemSuspended||store.data.settings.reducedMotion||store.data.settings.appearanceProfile==='quiet'||Boolean(onBattery&&store.data.settings.batterySaver),
+      settings: store.data.settings, messageTotal: store.data.messages.length, remoteHistoryAvailable:Boolean(remoteHistory?.cursor&&remoteHistory.conversationId===store.data.activeConversationId&&remoteHistory.process===codex.process&&remoteHistory.generation===panel?.renderGeneration),remoteHistoryLoading:Boolean(historyRequest),historyCancelable:Boolean(historyRequest&&!historyRequest.canceled&&!historyRequest.committing),threadId: store.data.threadId, panelVisible:panelVisible&&!screenLocked&&!systemSuspended,queuePaused:queuePauses.size>0,queuePauseReasons:[...queuePauses],queueEdit:queueEdit?{id:queueEdit.id,token:queueEdit.token,saving:queueEdit.saving}:null,screenLocked,motionReduced:screenLocked||systemSuspended||store.data.settings.reducedMotion||store.data.settings.appearanceProfile==='quiet'||Boolean(onBattery&&store.data.settings.batterySaver),
       lastMessageStatus: store.data.messages.at(-1)?.status,notificationIssue,unreadReply,
-      queue: queue.map(j => ({ id: j.id, text: j.text, attachmentCount:j.attachments?.length??0,modelName:j.selection.modelName,personaName:j.persona?.name,purpose:j.purpose,editing:Boolean(j.editing) })), busy: Boolean(current), requests,skills:skillsWorkspace===store.data.settings.workspace?skillsCatalog:[],skillsLoading,skillsError,accountUsage:connectionSetup.usage,usageLoading:Boolean(connectionSetup.usageWork),
+      queue: queue.map(j => ({ id: j.id, text: j.text, attachmentCount:j.attachments?.length??0,modelName:j.selection.modelName,personaName:j.persona?.name,purpose:j.purpose,editing:Boolean(j.editing) })), busy: Boolean(current),storageBusy, requests,skills:skillsWorkspace===store.data.settings.workspace?skillsCatalog:[],skillsLoading,skillsError,accountUsage:connectionSetup.usage,usageLoading:Boolean(connectionSetup.usageWork),
       connection: (forcedDemo || store.data.settings.demo) ? 'demo' : connectionState, demoLocked: forcedDemo,cliDiagnostics:connectionSetup.diagnostics,connectionHelp:connectionIssue??{...connectionSetup.state,...(modelsError&&connectionSetup.state.phase==='ready'?{phase:'error',message:'연결 준비를 마치지 못했어요. 다시 연결하거나 모델 설정을 확인해주세요.'}:{})},
       characterState,activityLabel,
       sleeping, warning: store.warning, packErrors, shortcut: store.shortcut,activeShortcut,
       packArchives:packArchiveCatalog,models: modelCatalog.models, modelDefaults: modelCatalog.defaults, modelsStatus, modelsError,
-      activeConversationId: store.data.activeConversationId, conversations:historyCatalog,conversationRevision:store.registryRevision, historyLoading, historyWarning, preparing, attachmentPicking, pendingDeletionId:store.pendingDeletion?.id??null,compactMode:Boolean(panel?.compactMode),bubbleBelow:Boolean(panel?.bubbleBelow),bubbleTailX:panel?.bubbleTailX??180
+      activeConversationId: store.data.activeConversationId, conversations:historyCatalog,conversationRevision:store.registryRevision, historyLoading, historyWarning, preparing, attachmentPicking, pendingDeletionId:store.pendingDeletion?.id??null,compactMode:Boolean(panel?.compactMode),simpleReplyId:panel?.simpleReplyId??null,simpleDisplayGeneration:panel?.simpleDisplayGeneration??0,simpleHideDeadline,simpleProtected:Boolean(panel?.simpleProtected),bubbleBelow:Boolean(panel?.bubbleBelow),bubbleTailX:panel?.bubbleTailX??180
     };
     for (const window of [pet, petNotice, panel]) if (window && !window.isDestroyed() && window.rendererReady && !window.webContents.isDestroyed() && !window.webContents.mainFrame.detached) {
       let payload;
@@ -183,7 +213,7 @@ function publish(immediate = false) {
           for(let i=store.data.messages.length-1;i>=0&&count<100;i--){const size=Buffer.byteLength(store.data.messages[i].text);if(count&&bytes+size>256*1024)break;bytes+=size;count++;}
           window.messageLimit=Math.max(1,count);
         }
-        const visible=store.data.messages.slice(-(window.messageLimit??100)).map(message=>message.text.length>100000?{...message,text:message.text.slice(0,100000),displayTruncated:true}:message),entries=new Map(),upsert=[];
+        const visible=(window.compactMode?(simpleReply?[simpleReply]:[]):store.data.messages.slice(-(window.messageLimit??100))).map(message=>message.text.length>100000?{...message,text:message.text.slice(0,100000),displayTruncated:true}:message),entries=new Map(),upsert=[];
         for (const message of visible) {
           const metadata=JSON.stringify({...message,text:undefined}),previous=window.messageView.entries.get(message.id);
           if (!previous || previous.text!==message.text || previous.metadata!==metadata) upsert.push(message);
@@ -206,16 +236,21 @@ function publish(immediate = false) {
 
 function showPanel(tab = 'chat', full = false, positionOnly = false) {
   if (!pet || !panel || quitting || screenLocked || systemSuspended || pet.isDestroyed() || panel.isDestroyed()) return;
-  const bounds = pet.getBounds(), area = screen.getDisplayNearestPoint({x:Math.round(petAnchor.x),y:Math.round(petAnchor.y-80)}).workArea;
+  const previous=panel.getBounds(),wasCompact=Boolean(panel.compactMode);
+  if(!wasCompact&&panel.isVisible())detailBounds={...previous};
+  if(!positionOnly){clearTimeout(simpleHideTimer);simpleHideTimer=null;simpleHideDeadline=null;panel.simpleReady=false;panel.simpleDisplayGeneration=(panel.simpleDisplayGeneration??0)+1;panelResize=null;}
   panel.compactMode=tab==='chat'&&!full&&!requests.length&&store.data.settings.chatMode==='bubble';
+  const bounds = pet.getBounds(), area = screen.getDisplayNearestPoint(detailBounds&&!panel.compactMode?{x:Math.round(detailBounds.x+detailBounds.width/2),y:Math.round(detailBounds.y+detailBounds.height/2)}:{x:Math.round(petAnchor.x),y:Math.round(petAnchor.y-80)}).workArea;
   const comfortable=store.data.settings.miniSize==='comfortable';
-  const width=Math.min(panel.compactMode?(comfortable?400:360):460,area.width-24),height=Math.min(panel.compactMode?(comfortable?480:410):740,area.height-24);
+  const width=Math.min(panel.compactMode?(comfortable?400:360):(detailBounds?.width??460),area.width-24),height=Math.min(panel.compactMode?Math.min(panel.simpleContentHeight??210,comfortable?480:410):(detailBounds?.height??740),area.height-24);
   const previousSize=panel.getBounds();if(previousSize.width!==width||previousSize.height!==height)panel.setSize(width,height);
   const size = panel.getBounds();
   let x = bounds.x - size.width + 25 >= area.x ? bounds.x - size.width + 25 : bounds.x + bounds.width - 25,y=bounds.y+bounds.height-size.height;
   if(panel.compactMode){x=petAnchor.x-width/2;y=petAnchor.y-35-petLayout.characterHeight-height-8;panel.bubbleBelow=y<area.y;if(panel.bubbleBelow)y=petAnchor.y+8;}
+  else if(detailBounds){x=detailBounds.x;y=detailBounds.y;}
   x=Math.round(Math.max(area.x,Math.min(x,area.x+area.width-width)));y=Math.round(Math.max(area.y,Math.min(y,area.y+area.height-height)));
   panel.bubbleTailX=Math.max(30,Math.min(width-30,petAnchor.x-x));panel.setPosition(x,y);
+  if(!panel.compactMode)detailBounds=panel.getBounds();
   if(positionOnly){panel.webContents.send('bubble-placement',{below:panel.bubbleBelow,tailX:panel.bubbleTailX});return;}
   panel.show(); panel.focus(); panel.pendingTab=tab;panel.activeTab=tab; if (panel.rendererReady) panel.webContents.send('show-tab',tab); publish();
   if (!historyLoading && !(forcedDemo || store.data.settings.demo)) void refreshModels(true).catch(() => {});
@@ -429,11 +464,12 @@ codex.on('protocol-error', error => { store.warning = error; publish(); });
 
 app.whenReady().then(async () => {
   let executable=ConnectionSetup.findExecutable(null)??'codex';
-  if (modelSmoke || historySmoke || timingSmoke || performanceSmoke || deleteSmoke || buddyFeatureSmoke || connectionImageSmoke) executable = path.join(__dirname, '..', 'test', 'fixtures', connectionImageSmoke?'connection-image-codex.cjs':buddyFeatureSmoke?'persona-codex.cjs':deleteSmoke?'delete-codex.cjs':'model-codex.cjs');
+  if (modelSmoke || historySmoke || timingSmoke || performanceSmoke || deleteSmoke || buddyFeatureSmoke || connectionImageSmoke) executable = path.join(__dirname, '..', 'test', 'fixtures', connectionImageSmoke?'connection-image-codex.cjs':(buddyFeatureSmoke||deleteSmoke)?'delete-codex.cjs':'model-codex.cjs');
   const workspace = path.join(app.getPath('userData'), 'workspace'); fs.mkdirSync(workspace, { recursive: true });
   store = new Store(app.getPath('userData'), { buddyName:'옹기봇', characterId: 'onggi-clip', codexPath: executable, workspace, demo: false, reducedMotion: false, alwaysOnTop: true, position: null, model: 'gpt-5.6-luna', effort: 'high', serviceTier: 'default', measureResponseTime:false,skinId:'paper',chatMode:'panel',personaModes:{},appearanceProfile:'custom',batterySaver:false,characterScale:.5,notifyCompleted:true,notifyApproval:true,notifyFailed:true,notifyPreview:false,notifySound:false,approvalDisplay:'panel',quietHoursEnabled:false,quietStart:1320,quietEnd:480,fontScale:100,miniSize:'small',sendKey:'enter',hotkey:'CommandOrControl+Shift+Space' });
   responseImages=new ResponseImages(path.join(store.directory,'response-images'),assetValidator);
   attachmentStore=new AttachmentStore(path.join(store.directory,'attachments'),responseImages);
+  storageMaintenance=new StorageMaintenance(store.directory);
   if(responseImages.error)store.warning=responseImages.error;
   const savedName=typeof store.data.settings.buddyName==='string'?store.data.settings.buddyName.trim().normalize('NFC'):'';
   store.data.settings.buddyName=savedName&&Array.from(savedName).length<=20&&!/[\u0000-\u001f\u007f-\u009f]/u.test(savedName)?savedName:'옹기봇';
@@ -485,11 +521,12 @@ app.whenReady().then(async () => {
   pet.on('show',()=>{if(petLayout.bubbleVisible&&!screenLocked&&!systemSuspended&&!petNotice.webContents.isLoadingMainFrame())petNotice.showInactive();publish(true);});
   petNotice.once('ready-to-show',()=>{if(petLayout.bubbleVisible&&pet.isVisible())petNotice.showInactive();});
   panel.on('focus',()=>{if(!historyLoading && !(forcedDemo || store.data.settings.demo))void refreshModels(true).catch(()=>{});});
-  panel.on('show',()=>publish(true)); panel.on('hide',()=>publish(true));
+  panel.on('show',()=>publish(true)); panel.on('hide',()=>{if(!panel.compactMode&&!panel.isDestroyed())detailBounds=panel.getBounds();clearTimeout(simpleHideTimer);simpleHideTimer=null;simpleHideDeadline=null;panel.simpleReady=false;panel.simpleDisplayGeneration=(panel.simpleDisplayGeneration??0)+1;panelResize=null;publish(true);});
   for (const window of [pet, petNotice, panel]) {
     window.rendererReady = false;
     window.webContents.on('did-start-loading',()=>{
       window.renderGeneration=(window.renderGeneration??0)+1;window.rendererReady=false;
+      if(window===panel){if(historyRequest)historyRequest.canceled=true;remoteHistory=null;clearTimeout(simpleHideTimer);simpleHideTimer=null;simpleHideDeadline=null;panel.simpleReady=false;panel.simpleInputProtected=false;panel.simpleDisplayGeneration=(panel.simpleDisplayGeneration??0)+1;panelResize=null;}
       if(window===pet||window===petNotice){noticeHit=null;noticeHitRevision++;}
       // 새 화면이 편집 초안을 잃어도 원래 대기 질문은 보류 상태로 보존한다.
       if(window===panel&&queueEdit&&!queueEdit.saving){
@@ -507,6 +544,7 @@ app.whenReady().then(async () => {
     window.webContents.on('render-process-gone', (_event, details) => {
       if (quitting) return;
       window.rendererReady=false;
+      if(window===panel){clearTimeout(simpleHideTimer);simpleHideTimer=null;simpleHideDeadline=null;panel.simpleReady=false;panel.simpleDisplayGeneration=(panel.simpleDisplayGeneration??0)+1;panelResize=null;}
       if(window===panel&&queueEdit&&!queueEdit.saving){const job=queue.find(item=>item.id===queueEdit.id);if(job)job.editing=false;for(const [id,record]of pendingAttachments)if(record.editingJobId===queueEdit.id)pendingAttachments.delete(id);queueEdit=null;queuePauses.add('manual');}
       if (!store.warning) store.warning = '화면이 종료되어 복구합니다. 질문은 자동 재전송하지 않습니다. (' + details.reason + ')';
       window.catalogVersion = 0; window.messageView = null;
@@ -572,6 +610,7 @@ app.whenReady().then(async () => {
   if(!store.shortcut&&activeShortcut!=='CommandOrControl+Shift+Space'){activeShortcut='CommandOrControl+Shift+Space';store.shortcut=globalShortcut.register(activeShortcut,()=>{pet.show();showPanel();});}
   onBattery=powerMonitor.isOnBatteryPower();
   for(const name of ['lock-screen','unlock-screen','on-battery','on-ac','suspend','resume'])powerMonitor.on(name,()=>{
+    if(['lock-screen','suspend'].includes(name)){if(historyRequest)historyRequest.canceled=true;remoteHistory=null;clearTimeout(simpleHideTimer);simpleHideTimer=null;simpleHideDeadline=null;panel.simpleReady=false;panel.simpleDisplayGeneration=(panel.simpleDisplayGeneration??0)+1;panelResize=null;}
     if(name==='lock-screen')screenLocked=true;
     if(name==='unlock-screen')screenLocked=false;
     if(name==='on-battery')onBattery=true;
@@ -598,21 +637,22 @@ app.whenReady().then(async () => {
   if (modelSmoke&&!attachmentSmoke&&!expansionSmoke) { showPanel(); setTimeout(() => require('../scripts/model-ui-smoke.cjs')({ app,panel,store,codex,modelCatalog }),700); }
   if(deleteSmoke){showPanel();setTimeout(()=>require('../scripts/deletion-ui-smoke.cjs')({app,panel,store,codex}),700);}
   if (historySmoke) { showPanel(); setTimeout(() => require('../scripts/history-ui-smoke.cjs')({ app,panel,store,codex }),700); }
-  if (performanceSmoke) {showPanel();setTimeout(()=>require('../scripts/performance-ui-smoke.cjs')({app,panel,store,codex}),700);}
+  if (performanceSmoke) {showPanel();setTimeout(()=>require('../scripts/performance-ui-smoke.cjs')({app,panel,store,codex,responseImages,dialog}),700);}
   if (timingSmoke) {showPanel();setTimeout(()=>require('../scripts/timing-ui-smoke.cjs')({app,panel,store,codex}),700);}
   if(resourceSmoke) void require('../scripts/resource-smoke.cjs')({app,pet,panel,store});
   if (stabilitySmoke) { showPanel(); setTimeout(()=>require('../scripts/stability-ui-smoke.cjs')({app,pet,petNotice,panel,store,showPanel}),700); }
   if(attachmentSmoke){showPanel();setTimeout(()=>require('../scripts/attachments-ui-smoke.cjs')({app,panel,store,codex,dialog,shell,publish,getRuntime:()=>({current,queue,modelsStatus,preparing})}),700);}
   if(expansionSmoke){showPanel();setTimeout(()=>require('../scripts/buddy-expansion-smoke.cjs')({app,pet,panel,store,codex,clipboard,dialog,shell,publish,responseImages,setNotificationConstructor:constructor=>{NativeNotification=constructor;},getRuntime:()=>({current,queue,modelsStatus,preparing,queuePaused:queuePauses.size>0,requests,notificationIssue,unreadReply})}),700);}
   if(connectionImageSmoke){showPanel();setTimeout(()=>require('../scripts/connection-image-smoke.cjs')({app,panel,store,codex,shell,responseImages,publish,getRuntime:()=>({current,queue,queuePaused:queuePauses.size>0,connectionState,modelsStatus,modelRefreshing:Boolean(modelRefresh),setup:connectionSetup.state})}),700);}
+  if(chatUISmoke){showPanel();setTimeout(()=>require('../scripts/chat-ui-smoke.cjs')({app,pet,panel,store,codex,publish,showPanel,dialog,responseImages,getState:()=>({simpleHideDeadline,panelResize,detailBounds,simpleReplyId:panel.simpleReplyId,simpleDisplayGeneration:panel.simpleDisplayGeneration,simpleProtected:panel.simpleProtected,simpleReady:panel.simpleReady})}),700);}
   if (smoke || realSmoke) { showPanel(); require('../scripts/alpha-ui-smoke.cjs')({app,pet,petNotice,panel,store,codex,screen,publish,smoke,realSmoke}); }
 
 }).catch(error => { console.error(error); codex.stop(); dialog.showErrorBox('옹기봇 시작 실패', error.message); app.exit(1); });
 
 ipcMain.handle('attachment-input',async(event,payload)=>{
   if(!panel||panel.isDestroyed()||event.sender!==panel.webContents||event.senderFrame!==event.sender.mainFrame||!payload||!['drop','clipboard'].includes(payload.kind))throw Error('대화창의 첨부 입력을 확인해주세요.');
-  if(quitting||attachmentPicking||queueEdit?.saving||preparing||historyLoading||systemSuspended||screenLocked||store.writeBlocked)throw Error('현재 준비 작업을 마친 뒤 첨부해주세요.');
-  const conversationId=store.data.activeConversationId,workspace=store.data.settings.workspace,editingJobId=queueEdit?.id??null;attachmentPicking=true;publish(true);
+  if(quitting||storageBusy||attachmentPicking||queueEdit?.saving||preparing||historyLoading||systemSuspended||screenLocked||store.writeBlocked)throw Error('현재 준비 작업을 마친 뒤 첨부해주세요.');
+  const owner=panel,generation=owner.renderGeneration,conversationId=store.data.activeConversationId,workspace=store.data.settings.workspace,editingJobId=queueEdit?.id??null;attachmentPicking=true;publish(true);
   try{
     for(const [id,record]of pendingAttachments)if(Date.now()-record.createdAt>3600000&&!reservedAttachments.has(id))pendingAttachments.delete(id);
     let files;
@@ -634,7 +674,7 @@ ipcMain.handle('attachment-input',async(event,payload)=>{
     }
     if(files.length+pendingAttachments.size>128)throw Error('사용하지 않는 첨부를 제거한 뒤 다시 입력해주세요.');
     const attachments=await attachmentStore.import(files,{imagesOnly:payload.kind==='clipboard'});
-    if(quitting||panel.isDestroyed()||conversationId!==store.data.activeConversationId||workspace!==store.data.settings.workspace||(queueEdit?.id??null)!==editingJobId||systemSuspended||screenLocked)throw Error('대화 상태가 바뀌었어요. 다시 첨부해주세요.');
+    if(quitting||panel!==owner||owner.isDestroyed()||event.sender.isDestroyed()||event.senderFrame!==event.sender.mainFrame||event.sender.mainFrame.detached||generation!==owner.renderGeneration||conversationId!==store.data.activeConversationId||workspace!==store.data.settings.workspace||(queueEdit?.id??null)!==editingJobId||systemSuspended||screenLocked)throw Error('대화 상태가 바뀌었어요. 다시 첨부해주세요.');
     for(const attachment of attachments)pendingAttachments.set(attachment.id,{attachment:Object.freeze(attachment),conversationId,createdAt:Date.now(),editingJobId});
     return{ok:true,attachments,conversationId};
   }finally{attachmentPicking=false;publish(true);}
@@ -644,7 +684,77 @@ ipcMain.handle('action', async (event, action, payload = {}) => {
   if (quitting) return {ok:false};
   const owner=[pet,petNotice,panel].find(w=>w&&!w.isDestroyed()&&w.webContents===event.sender);
   if (!owner || event.senderFrame!==event.sender.mainFrame) throw new Error('허용되지 않은 창입니다.');
-  while (store?.saving && !['send','cancel','respond','sync','notice-hit','pet-pointer-sync','pet-layout','drag-start','drag-move','show-panel','hide-panel','copy','open-url','response-image','pause-queue','edit-queued','save-queued','cancel-queue-edit','cancel-all-queued','panel-tab','notice-read'].includes(action)) { try { await store.saving; } catch {} }
+  const requestGeneration=owner.renderGeneration;
+  if(action==='cancel-history'){
+    if(owner!==panel)throw Error('대화창에서 기록 조회를 취소해주세요.');
+    if(historyRequest?.committing)return{ok:false};
+    if(historyRequest)historyRequest.canceled=true;publish(true);return{ok:true};
+  }
+  if(storageBusy&&!['sync','storage-cancel','show-panel','hide-panel','copy','open-url','response-image','notice-read','panel-tab','pet-layout','pet-pointer-sync','notice-hit','simple-state','resize-start','resize-move','resize-end'].includes(action))throw Error('보관 파일 확인·정리를 마친 뒤 진행해주세요.');
+  if(action==='simple-state'){
+    if(owner!==panel||typeof payload.ready!=='boolean'||typeof payload.protected!=='boolean'||!Number.isSafeInteger(payload.generation)||payload.contentHeight!==undefined&&(!Number.isFinite(payload.contentHeight)||payload.contentHeight<1||payload.contentHeight>4096))throw Error('말풍선 표시 상태를 확인해주세요.');
+    if(!owner.rendererReady||owner.webContents.isDestroyed()||owner.webContents.mainFrame.detached||!owner.isVisible()||!owner.compactMode||owner.activeTab!=='chat'||screenLocked||systemSuspended||payload.conversationId!==store.data.activeConversationId||payload.generation!==owner.simpleDisplayGeneration||payload.replyId!==owner.simpleReplyId)return{ok:false};
+    owner.simpleInputProtected=payload.protected;
+    if(payload.contentHeight!==undefined){const height=Math.max(180,Math.min(Math.ceil(payload.contentHeight),store.data.settings.miniSize==='comfortable'?480:410));if(owner.simpleContentHeight!==height){owner.simpleContentHeight=height;showPanel('chat',false,true);}}
+    if(payload.ready){const reply=store.data.messages.find(message=>message.id===payload.replyId&&message.role==='assistant');if(reply?.status==='completed'&&!reply.error&&!reply.images?.some(image=>image.status==='pending')&&!store.saving&&!store.writeBlocked&&!current&&!preparing)owner.simpleReady=true;}
+    if(payload.protected){clearTimeout(simpleHideTimer);simpleHideTimer=null;simpleHideDeadline=null;}
+    publish(true);return{ok:true,ready:Boolean(owner.simpleReady)};
+  }
+  if(['resize-start','resize-move','resize-end'].includes(action)){
+    if(owner!==panel)throw Error('상세 대화창에서 크기를 조절해주세요.');
+    if(!owner.rendererReady||owner.webContents.isDestroyed()||owner.webContents.mainFrame.detached||!owner.isVisible()||owner.compactMode||screenLocked||systemSuspended){panelResize=null;return{ok:false};}
+    if(action==='resize-start'){
+      if(!['nw','ne','sw','se'].includes(payload.corner)||![payload.x,payload.y].every(value=>Number.isFinite(value)&&Math.abs(value)<=100000))throw Error('크기 조절 좌표를 확인해주세요.');
+      const bounds=owner.getBounds(),area=screen.getDisplayMatching(bounds).workArea,token=randomUUID();
+      if(bounds.x<area.x||bounds.y<area.y||bounds.x+bounds.width>area.x+area.width||bounds.y+bounds.height>area.y+area.height){panelResize=null;return{ok:false};}
+      panelResize={owner,generation:owner.renderGeneration,token,corner:payload.corner,x:payload.x,y:payload.y,bounds,area};return{ok:true,token};
+    }
+    const session=panelResize;
+    if(!session||session.owner!==owner||session.token!==payload.token||session.generation!==owner.renderGeneration)return{ok:false};
+    if(action==='resize-end'){panelResize=null;return{ok:true};}
+    if(![payload.x,payload.y].every(value=>Number.isFinite(value)&&Math.abs(value)<=100000))throw Error('크기 조절 좌표를 확인해주세요.');
+    const currentArea=screen.getDisplayMatching(session.bounds).workArea;
+    if(['x','y','width','height'].some(key=>currentArea[key]!==session.area[key])){panelResize=null;return{ok:false};}
+    const area=session.area,bounds=session.bounds,minWidth=Math.min(390,Math.max(1,area.width-24),session.corner.includes('w')?bounds.x+bounds.width-area.x:area.x+area.width-bounds.x),minHeight=Math.min(580,Math.max(1,area.height-24),session.corner.includes('n')?bounds.y+bounds.height-area.y:area.y+area.height-bounds.y),dx=payload.x-session.x,dy=payload.y-session.y;
+    let left=bounds.x,right=bounds.x+bounds.width,top=bounds.y,bottom=bounds.y+bounds.height;
+    if(session.corner.includes('w'))left=Math.max(area.x,Math.min(right-minWidth,bounds.x+dx));else right=Math.min(area.x+area.width,Math.max(left+minWidth,right+dx));
+    if(session.corner.includes('n'))top=Math.max(area.y,Math.min(bottom-minHeight,bounds.y+dy));else bottom=Math.min(area.y+area.height,Math.max(top+minHeight,bottom+dy));
+    const next={x:Math.round(left),y:Math.round(top),width:Math.round(right-left),height:Math.round(bottom-top)};
+    owner.setBounds(next);detailBounds=owner.getBounds();return{ok:true,bounds:detailBounds};
+  }
+  if (action === 'response-rendered') {
+    if (owner !== panel) throw new Error('대화창에서만 화면 반영을 확인할 수 있습니다.');
+    const conversationId=store.data.activeConversationId,messages=store.data.messages,generation=owner.renderGeneration,batch=Array.isArray(payload.items),items=batch?payload.items:[payload];
+    if(('items' in payload&&!batch)||!items.length||items.length>100||batch&&(typeof payload.conversationId!=='string'||payload.conversationId.length>256))throw Error('화면 반영 확인은 최대 100개 응답으로 보내주세요.');
+    if(payload.conversationId!==undefined&&payload.conversationId!==conversationId)return{ok:false};
+    const ids=new Set(),targets=[],byId=new Map(messages.map(message=>[message.id,message])),now=performance.timeOrigin+performance.now();
+    for(const item of items){
+      if(!item||typeof item.id!=='string'||!item.id||item.id.length>256||ids.has(item.id)||!Number.isFinite(item.renderedAt)||Math.abs(item.renderedAt-now)>60000||batch&&(!Number.isFinite(item.completedAt)||item.completedAt<=0||item.completedAt>now+60000))throw Error('화면 반영 시각·응답 목록이 올바르지 않습니다.');
+      ids.add(item.id);
+    }
+    for(const item of items){
+      const reply=byId.get(item.id),timing=reply?.timing;
+      if(!timing?.completedAt||reply.role!=='assistant'){if(batch)return{ok:false};continue;}
+      if(item.completedAt!==undefined&&item.completedAt!==timing.completedAt)return{ok:false};
+      targets.push({id:item.id,reply,timing,completedAt:timing.completedAt,renderedAt:item.renderedAt});
+    }
+    while(store.saving){try{await store.saving;}catch{}}
+    if(quitting||panel!==owner||owner.isDestroyed()||event.sender.isDestroyed()||event.senderFrame!==event.sender.mainFrame||event.sender.mainFrame.detached||generation!==owner.renderGeneration||conversationId!==store.data.activeConversationId||messages!==store.data.messages||!owner.isVisible()||owner.activeTab!==undefined&&owner.activeTab!=='chat'||screenLocked||systemSuspended||storageBusy||store.writeBlocked)return{ok:false};
+    const currentById=new Map(messages.map(message=>[message.id,message]));
+    if(targets.some(target=>currentById.get(target.id)!==target.reply||target.reply.timing!==target.timing||target.timing.completedAt!==target.completedAt))return{ok:false};
+    const changed=[];
+    for(const target of targets){
+      if(target.timing.renderedAt!==undefined)continue;
+      changed.push({...target,previous:{...target.timing}});
+      target.timing.renderedAt=Math.max(target.completedAt,target.renderedAt);
+      target.timing.renderMs=target.timing.renderedAt-target.completedAt;
+      target.timing.totalMs=target.timing.submittedAt===null?null:target.timing.renderedAt-target.timing.submittedAt;
+    }
+    if(!changed.length)return{ok:true};
+    try{await store.saveAsync();}catch(error){for(const target of changed)if(target.reply.timing===target.timing)target.reply.timing=target.previous;publish(true);throw error;}
+    publish(true);return{ok:true};
+  }
+  while (store?.saving && !['send','cancel','cancel-search','storage-cancel','respond','sync','notice-hit','pet-pointer-sync','pet-layout','drag-start','drag-move','show-panel','hide-panel','copy','open-url','response-image','pause-queue','edit-queued','save-queued','cancel-queue-edit','cancel-all-queued','panel-tab','notice-read'].includes(action)) { try { await store.saving; } catch {} }
   if(attachmentPicking&&['send','new-chat','open-conversation','delete-conversation','pick-workspace','pick-codex','settings','pick-attachments'].includes(action))throw Error('첨부 선택을 마친 뒤 진행해주세요.');
   if(owner===petNotice&&!['sync','show-panel','notice-hit','pet-pointer-sync'].includes(action))throw Error('안내 말풍선에서는 대화 열기만 사용할 수 있습니다.');
   if(action==='notice-hit'){
@@ -694,7 +804,7 @@ ipcMain.handle('action', async (event, action, payload = {}) => {
       skillsCatalog=next;skillsWorkspace=workspace;connectionSetup.diagnostics.features.skills='supported';skillsError=entry.errors?.length?'일부 스킬을 읽지 못했어요. 사용할 수 있는 스킬만 표시합니다.':null;publish(true);return{ok:true};
     }catch(error){skillsCatalog=[];skillsWorkspace=null;connectionSetup.diagnostics.features.skills=error.code===-32601?'unsupported':'unknown';skillsError=error.code===-32601?'이 CLI는 스킬 조회를 지원하지 않아요. 일반 질문은 계속할 수 있어요.':'스킬 목록을 확인하지 못했어요. 연결과 작업 폴더를 확인해주세요.';publish(true);throw Error(skillsError);}finally{skillsLoading=false;publish(true);}
   }
-  if(action==='panel-tab'){if(owner!==panel||!['chat','history','settings'].includes(payload.tab))throw Error('화면 선택을 확인해주세요.');panel.activeTab=payload.tab;return{ok:true};}
+  if(action==='panel-tab'){if(owner!==panel||!['chat','history','settings'].includes(payload.tab))throw Error('화면 선택을 확인해주세요.');if(panel.activeTab!==payload.tab){clearTimeout(simpleHideTimer);simpleHideTimer=null;simpleHideDeadline=null;panel.simpleReady=false;panel.simpleDisplayGeneration=(panel.simpleDisplayGeneration??0)+1;panelResize=null;}panel.activeTab=payload.tab;publish(true);return{ok:true};}
   if(action==='notice-read'){if(owner===panel&&panel.rendererReady&&panel.isVisible()&&panel.activeTab==='chat'&&!screenLocked&&!systemSuspended&&unreadReply?.messageId===payload.id&&unreadReply.conversationId===store.data.activeConversationId){unreadReply=null;publish(true);}return{ok:true};}
   if(action==='pause-queue'){if(owner!==panel||systemSuspended||screenLocked)throw Error('대화창에서 대기 질문을 보류해주세요.');queuePauses.add('manual');publish(true);return{ok:true};}
   if(action==='edit-queued'){
@@ -750,22 +860,11 @@ ipcMain.handle('action', async (event, action, payload = {}) => {
   }
   if (action === 'load-older') {
     if(event.sender!==panel.webContents)throw new Error('대화창에서만 이전 내용을 불러올 수 있습니다.');
+    if(historyLoading)throw Error('이전 내용을 불러오는 중입니다.');
     let count=0,bytes=0;
     for(let i=store.data.messages.length-(panel.messageLimit??100)-1;i>=0&&count<100;i--){const size=Buffer.byteLength(store.data.messages[i].text);if(count&&bytes+size>256*1024)break;bytes+=size;count++;}
-    panel.messageLimit=(panel.messageLimit??100)+count;panel.expandedHistory=true;publish(true);return{ok:true};
-  }
-  if (action === 'response-rendered') {
-    if (event.sender !== panel.webContents) throw new Error('대화창에서만 화면 반영을 확인할 수 있습니다.');
-    if (!panel.isVisible() || screenLocked || systemSuspended) return {ok:false};
-    const reply = store.data.messages.find(m => m.id === payload.id && m.role === 'assistant');
-    if (!reply?.timing?.completedAt || reply.timing.renderedAt !== undefined) return {ok:true};
-    if (!Number.isFinite(payload.renderedAt) || Math.abs(payload.renderedAt - (performance.timeOrigin + performance.now())) > 60000) throw new Error('화면 반영 시각이 올바르지 않습니다.');
-    const previous = { ...reply.timing };
-    reply.timing.renderedAt = Math.max(reply.timing.completedAt,payload.renderedAt);
-    reply.timing.renderMs = reply.timing.renderedAt - reply.timing.completedAt;
-    reply.timing.totalMs = reply.timing.submittedAt === null ? null : reply.timing.renderedAt - reply.timing.submittedAt;
-    try { await store.saveAsync(); } catch (error) { reply.timing = previous; publish(true); throw error; }
-    publish(true); return {ok:true};
+    if(count){panel.messageLimit=(panel.messageLimit??100)+count;panel.expandedHistory=true;publish(true);return{ok:true};}
+    if(!remoteHistory?.cursor)return{ok:true};
   }
   if (action === 'delete-conversation') {
     if(event.sender!==panel.webContents||payload.confirmed!==true)throw new Error('대화창에서 삭제할 대화를 확인해주세요.');
@@ -841,14 +940,40 @@ ipcMain.handle('action', async (event, action, payload = {}) => {
     if(payload.title!==undefined){selected.title=payload.title.trim().normalize('NFC');selected.titleSource='manual';}if(payload.pinned!==undefined)selected.pinned=payload.pinned;
     try{store.save({includeHistory:false});}catch(error){Object.assign(store.data.conversations.find(item=>item.id===payload.id)??selected,previous);publish(true);throw error;}publish(true);return{ok:true};
   }
+  if(action==='storage-cancel'){if(owner!==panel)throw Error('대화창에서 보관 작업을 중단해주세요.');storageRevision++;return{ok:true};}
+  if(['storage-inspect','storage-quarantine','storage-restore'].includes(action)){
+    if(owner!==panel||current||queue.length||preparing||queueEdit||attachmentPicking||historyLoading||modelRefresh||packImporting||queueControlSaving||systemSuspended||screenLocked||store.saving)throw Error('진행·대기 작업을 마친 뒤 보관 파일을 확인해주세요.');
+    if(action!=='storage-inspect'&&store.writeBlocked)throw Error('기록 저장을 복구한 뒤 정리해주세요.');
+    storageMaintenance??=new StorageMaintenance(store.directory);storageBusy=true;publish(true);
+    const revision=++storageRevision,generation=owner.renderGeneration;
+    const options={conversations:store.data.conversations,messages:store.data.messages,extraMessages:[{attachments:[...pendingAttachments.values()].map(item=>item.attachment)}],blocked:store.writeBlocked,isCurrent:()=>revision===storageRevision&&generation===owner.renderGeneration&&!quitting&&!owner.isDestroyed()&&!systemSuspended&&!screenLocked};
+    try{
+      if(action==='storage-inspect')return{ok:true,...await storageMaintenance.inspect(options)};
+      if(action==='storage-quarantine')return{ok:true,...await storageMaintenance.quarantine(payload,options,()=>options.isCurrent()&&!current&&!queue.length&&!preparing&&!store.writeBlocked)};
+      return{ok:true,...await storageMaintenance.restore(payload.id,()=>options.isCurrent()&&!store.writeBlocked)};
+    }finally{storageBusy=false;publish(true);}
+  }
+  if(action==='cancel-search'){
+    if(owner!==panel)throw Error('대화창에서 검색을 중단해주세요.');historySearchRevision++;return{ok:true};
+  }
   if(action==='search-conversations'){
     if(owner!==panel||typeof payload.query!=='string'||!payload.query.trim()||payload.query.length>200)throw Error('검색어는 1~200자로 입력해주세요.');
-    const query=payload.query.trim().toLocaleLowerCase(),matches=[],catalog=[...store.data.conversations].sort((a,b)=>b.updatedAt-a.updatedAt);let scanned=0,bytes=0;
+    const revision=++historySearchRevision,generation=owner.renderGeneration,query=payload.query.trim().toLocaleLowerCase(),matches=[],catalog=[...store.data.conversations].sort((a,b)=>b.updatedAt-a.updatedAt);let scanned=0,bytes=0;
     for(const conversation of catalog){
+      if(revision!==historySearchRevision||quitting||owner.isDestroyed()||generation!==owner.renderGeneration)return{ok:true,canceled:true,matches:[],scanned,limited:true};
       if(scanned>=100||bytes>=32*1024*1024||matches.length>=50)break;if(store.pendingDeletion?.ids.includes(conversation.id))continue;
-      try{const size=(await fs.promises.stat(path.join(store.historyDirectory,conversation.id+'.json'))).size;if(bytes+size>32*1024*1024)break;bytes+=size;scanned++;const history=conversation.id===store.data.activeConversationId?{messages:store.data.messages}:store.readHistory(conversation.id);const hit=history.messages.find(item=>item.text.toLocaleLowerCase().includes(query));if(hit){const at=hit.text.toLocaleLowerCase().indexOf(query);matches.push({id:conversation.id,snippet:hit.text.slice(Math.max(0,at-30),at+120).replace(/\s+/g,' ')});}}catch{}
+      try{
+        const size=(await fs.promises.stat(path.join(store.historyDirectory,conversation.id+'.json'))).size;
+        if(revision!==historySearchRevision||quitting||owner.isDestroyed()||generation!==owner.renderGeneration)return{ok:true,canceled:true,matches:[],scanned,limited:true};
+        if(store.pendingDeletion?.ids.includes(conversation.id)||!store.data.conversations.some(item=>item.id===conversation.id))continue;
+        if(bytes+size>32*1024*1024)break;bytes+=size;scanned++;
+        const history=conversation.id===store.data.activeConversationId?{messages:store.data.messages}:store.readHistory(conversation.id);
+        let hit,at;for(const item of history.messages){at=item.text.toLocaleLowerCase().indexOf(query);if(at!==-1){hit=item;break;}}
+        if(hit)matches.push({id:conversation.id,snippet:hit.text.slice(Math.max(0,at-30),at+120).replace(/\s+/g,' ')});
+      }catch{}
       await new Promise(resolve=>setImmediate(resolve));
     }
+    if(revision!==historySearchRevision||quitting||owner.isDestroyed()||generation!==owner.renderGeneration)return{ok:true,canceled:true,matches:[],scanned,limited:true};
     return{ok:true,matches,scanned,limited:scanned<catalog.length||matches.length>=50};
   }
   if(action==='export-conversation'){
@@ -857,74 +982,144 @@ ipcMain.handle('action', async (event, action, payload = {}) => {
     const messages=structuredClone(selected.id===store.data.activeConversationId?store.data.messages:store.readHistory(selected.id).messages),title=selected.title;
     const destination=await dialog.showSaveDialog(panel,{title:'대화 Markdown 저장',defaultPath:'버디-대화-'+selected.id.slice(0,8)+'.md',filters:[{name:'Markdown',extensions:['md']}]});if(destination.canceled)return{ok:true,canceled:true};
     if(quitting||owner.isDestroyed()||!store.data.conversations.some(item=>item.id===selected.id)||store.pendingDeletion?.ids.includes(selected.id)||typeof destination.filePath!=='string'||!path.isAbsolute(destination.filePath)||path.extname(destination.filePath).toLowerCase()!=='.md')throw Error('대화나 저장 위치가 바뀌었어요. 다시 선택해주세요.');
-    const file=destination.filePath,folder=file.slice(0,-3)+'.assets',parts=['# '+title.replace(/[\\`*_{}[\]<>#]/g,'')+'\n','옹기봇 대화 · '+new Date().toISOString()+'\n'],copies=[];let total=0,unavailable=0;
-    for(const message of messages){
-      parts.push(`## ${message.role==='user'?'나':message.role==='assistant'?'버디':'안내'} · ${message.mode==='demo'?'체험 응답':'Codex'} · ${{completed:'완료',failed:'실패',interrupted:'중단',queued:'대기',running:'진행 중'}[message.status]??'상태 미확인'}\n`,message.text+'\n');
-      if(message.error)parts.push('오류: '+message.error+'\n');
-      for(const attachment of message.attachments??[])parts.push('첨부: '+attachment.name+' ('+attachment.bytes+' bytes · 파일 내용 제외)\n');
-      for(const image of message.images??[]){
-        if(!payload.includeImages||image.status!=='ready'){parts.push('이미지: '+(image.status==='ready'?'사본 제외':'생성 미완료')+'\n');continue;}
-        try{if(total+image.bytes>128*1024*1024||copies.length>=256)throw Error('export limit');const bytes=responseImages.read(image).bytes;total+=bytes.length;const name=copies.length+1+'.'+image.mime.split('/')[1];copies.push({name,bytes});parts.push('![생성 이미지]('+encodeURIComponent(path.basename(folder))+'/'+name+')\n');}catch{unavailable++;parts.push('이미지: 보관 사본을 읽지 못해 제외됨\n');}
-      }
-    }
-    let createdFolder=false,handle,fileIdentity;
+    const file=destination.filePath,folder=file.slice(0,-3)+'.assets',parts=['# '+title.replace(/[\\`*_{}[\]<>#]/g,'')+'\n','옹기봇 대화 · '+new Date().toISOString()+'\n'];
+    let total=0,unavailable=0,imageCount=0,createdFolder=false,handle,fileIdentity;
     try{
-      handle=await fs.promises.open(file,'wx',0o600);fileIdentity=await handle.stat();if(copies.length){await fs.promises.mkdir(folder,{mode:0o700});createdFolder=true;for(const copy of copies)await fs.promises.writeFile(path.join(folder,copy.name),copy.bytes,{flag:'wx',mode:0o600});}
+      handle=await fs.promises.open(file,'wx',0o600);fileIdentity=await handle.stat();
+      for(const message of messages){
+        if(quitting||owner.isDestroyed()||!store.data.conversations.some(item=>item.id===selected.id)||store.pendingDeletion?.ids.includes(selected.id))throw Error('대화나 창 상태가 바뀌었습니다.');
+        parts.push(`## ${message.role==='user'?'나':message.role==='assistant'?'버디':'안내'} · ${message.mode==='demo'?'체험 응답':'Codex'} · ${{completed:'완료',failed:'실패',interrupted:'중단',queued:'대기',running:'진행 중'}[message.status]??'상태 미확인'}\n`,message.text+'\n');
+        if(message.error)parts.push('오류: '+message.error+'\n');
+        for(const attachment of message.attachments??[])parts.push('첨부: '+attachment.name+' ('+attachment.bytes+' bytes · 파일 내용 제외)\n');
+        for(const image of message.images??[]){
+          if(quitting||owner.isDestroyed()||!store.data.conversations.some(item=>item.id===selected.id)||store.pendingDeletion?.ids.includes(selected.id))throw Error('대화나 창 상태가 바뀌었습니다.');
+          if(!payload.includeImages||image.status!=='ready'){parts.push('이미지: '+(image.status==='ready'?'사본 제외':'생성 미완료')+'\n');continue;}
+          let bytes;
+          try{if(total+image.bytes>128*1024*1024||imageCount>=256)throw Error('export limit');bytes=responseImages.read(image).bytes;if(total+bytes.length>128*1024*1024)throw Error('export limit');}
+          catch{unavailable++;parts.push('이미지: 보관 사본을 읽지 못해 제외됨\n');continue;}
+          if(!createdFolder){await fs.promises.mkdir(folder,{mode:0o700});createdFolder=true;}
+          const name=imageCount+1+'.'+image.mime.split('/')[1];await fs.promises.writeFile(path.join(folder,name),bytes,{flag:'wx',mode:0o600});
+          total+=bytes.length;imageCount++;parts.push('![생성 이미지]('+encodeURIComponent(path.basename(folder))+'/'+name+')\n');
+        }
+      }
+      if(quitting||owner.isDestroyed()||!store.data.conversations.some(item=>item.id===selected.id)||store.pendingDeletion?.ids.includes(selected.id))throw Error('대화나 창 상태가 바뀌었습니다.');
       await handle.writeFile(parts.join('\n'));await handle.sync();await handle.close();handle=null;
     }catch(error){
       if(handle){await handle.close().catch(()=>{});const remaining=await fs.promises.lstat(file).catch(()=>null);if(remaining?.isFile()&&remaining.dev===fileIdentity?.dev&&remaining.ino===fileIdentity?.ino&&remaining.birthtimeMs===fileIdentity?.birthtimeMs)await fs.promises.rm(file,{force:true}).catch(()=>{});}
       if(createdFolder)await fs.promises.rmdir(folder).catch(()=>{});
       throw Error(error.code==='EEXIST'?'같은 이름의 파일이나 이미지 폴더가 있어요. 새 이름을 선택해주세요.':'대화를 내보내지 못했어요. 저장 위치와 공간을 확인해주세요. 부분 이미지 사본이 남았다면 선택한 폴더에서 확인할 수 있어요.');
     }
-    return{ok:true,imageCount:copies.length,unavailable};
+    return{ok:true,imageCount,unavailable};
   }
-  if (action === 'open-conversation') {
-    if (current || queue.length || preparing || historyLoading || modelRefresh) throw new Error('진행 중인 작업을 완료하거나 취소한 뒤 대화를 바꿔주세요.');
-    if(store.pendingDeletion?.ids.includes(payload.id))throw new Error('삭제 확인이 필요한 대화입니다. 먼저 삭제를 재시도해주세요.');
-    const selected = store.data.conversations.find(c => c.id === payload.id && c.source === 'onggi_bot');
-    if (!selected) throw new Error('옹기봇에서 만든 대화만 열 수 있습니다.');
-    historyLoading = true; historyWarning = null; publish();
-    try {
-      const contextChanged = selected.workspace !== store.data.settings.workspace || selected.codexPath !== store.data.settings.codexPath;
-      store.openConversation(selected.id);panel.messageView=null; resumed = false; listening = false;
-      if (contextChanged) { codex.stop(); connectionState = 'disconnected'; modelCatalog.models = []; modelsStatus = 'idle'; }
-      if (selected.threadId && selected.mode === 'codex' && !forcedDemo) {
-        try {
-          await codex.connect(store.data.settings.codexPath, store.data.settings.workspace);
-          const response = await codex.request('thread/read', { threadId: selected.threadId, includeTurns: true });
-          if(response?.thread?.id!==selected.threadId||!Array.isArray(response.thread.turns))throw Error('조회한 대화 ID·기록 형식이 일치하지 않습니다.');
-          const previous = store.data.messages, messages = [];
-          let previousIndex = 0;
-          for (const turn of response.thread.turns ?? []) {
-            if(!turn||typeof turn.id!=='string'||!turn.id||!Array.isArray(turn.items)||!['completed','failed','interrupted','inProgress'].includes(turn.status))throw Error('Codex 턴 기록 형식을 확인해주세요.');
-            for(const item of turn.items){if(!item||typeof item.type!=='string')throw Error('Codex 항목 형식을 확인해주세요.');if(['agentMessage','plan'].includes(item.type)&&typeof item.text!=='string'||['enteredReviewMode','exitedReviewMode'].includes(item.type)&&typeof item.review!=='string'||item.type==='userMessage'&&(!Array.isArray(item.content)||item.content.some(content=>!content||typeof content.type!=='string'||content.type==='text'&&typeof content.text!=='string')))throw Error('Codex 대화 텍스트 형식을 확인해주세요.');}
-            const input = turn.items?.filter(i => i.type === 'userMessage').flatMap(i => i.content ?? []).find(i => i.type === 'text')?.text??'';
-
-            const remoteUserId = turn.items?.find(i => i.type === 'userMessage')?.id;
-            let oldIndex = previous.findIndex(m => m.role === 'user' && (m.turnId === turn.id || m.id === remoteUserId));
-            if (oldIndex < 0) oldIndex = previous.findIndex((m,i) => i >= previousIndex && m.role === 'user' && m.text === input);
-            const oldUser = oldIndex >= 0 ? previous[oldIndex] : null, oldReply = oldIndex >= 0 && previous[oldIndex + 1]?.role === 'assistant' ? previous[oldIndex + 1] : null;
-            if (oldIndex >= 0) previousIndex = oldIndex + 1;
-            if(!input&&!oldUser)continue;
-            const review=turn.items.findLast(item=>item.type==='exitedReviewMode'&&item.review.trim());
-            const output=(review?.review??turn.items.filter(item=>['agentMessage','plan'].includes(item.type)).map(item=>item.text).join('\n\n')).slice(0,100000);
-            const status = turn.status === 'completed' ? 'completed' : turn.status === 'failed' ? 'failed' : 'interrupted';
-            const timestamp = Number(turn.startedAt) || selected.createdAt;
-            messages.push({ ...oldUser, id: oldUser?.id ?? `${turn.id}:user`, turnId: turn.id, role: 'user', text: oldUser?.text??input, mode: 'codex', status, createdAt: oldUser?.createdAt ?? (timestamp < 1e12 ? timestamp * 1000 : timestamp) });
-            const images=[];
-            for(const item of turn.items){if(images.length>=8)break;if(item.type==='imageGeneration'||item.type==='mcpToolCall'&&Array.isArray(item.result?.content)&&item.result.content.some(c=>c?.type==='image'))images.push(...await responseImages.capture(item,{workspace:store.data.settings.workspace,threadId:selected.threadId}));}
-            if (output || oldReply || images.length) messages.push({ ...oldReply, id: oldReply?.id ?? `${turn.id}:reply`, turnId: turn.id, role: 'assistant', text: output || oldReply?.text || '',...(images.length?{images:images.slice(0,8)}:{}), mode: 'codex', status, createdAt: oldReply?.createdAt ?? Date.now() });
-          }
-          if (messages.length && messages.length >= previous.filter(m => !['failed','interrupted'].includes(m.status)).length) {
-            const remoteUserIds = new Set(messages.filter(m => m.role === 'user').map(m => m.id));
-            for (let i = 0; i < previous.length; i++) if (previous[i].role === 'user' && !remoteUserIds.has(previous[i].id)) { messages.push(previous[i]); if (previous[i + 1]?.role === 'assistant') messages.push(previous[++i]); }
-            store.data.messages=messages;try{store.save();}catch(error){if(!store.writeBlocked)store.data.messages=previous;throw error;}
-          }
-          connectionState = 'connected';
-        } catch (error) { historyWarning = store.writeBlocked?`원격 기록 병합을 확정하지 못했습니다. 현재 화면·원본·저널을 보존합니다: ${error.message}`:`저장된 기록을 표시합니다. Codex 기록 확인: ${error.message}`; }
+  if (action === 'open-conversation'||action==='load-older') {
+    if(owner!==panel||requestGeneration!==owner.renderGeneration||current||queue.length||preparing||historyLoading||modelRefresh||systemSuspended||screenLocked)throw Error('진행 중인 작업을 완료하거나 취소한 뒤 대화를 확인해주세요.');
+    const opening=action==='open-conversation',selected=store.data.conversations.find(c=>c.id===(opening?payload.id:store.data.activeConversationId)&&c.source==='onggi_bot');
+    if(!selected)throw Error('옹기봇에서 만든 대화만 열 수 있습니다.');
+    if(store.pendingDeletion?.ids.includes(selected.id))throw Error('삭제 확인이 필요한 대화입니다. 먼저 삭제를 재시도해주세요.');
+    if(!opening&&(!remoteHistory||remoteHistory.conversationId!==selected.id||remoteHistory.process!==codex.process||remoteHistory.generation!==owner.renderGeneration)){remoteHistory=null;publish(true);throw Error('연결이나 화면이 바뀌었어요. 대화를 다시 열어 이전 내용을 확인해주세요.');}
+    historyLoading=true;historyWarning=null;
+    const operation={canceled:false,generation:requestGeneration,frame:event.senderFrame};historyRequest=operation;publish(true);
+    try{
+      if(opening){
+        remoteHistory=null;
+        const contextChanged=selected.workspace!==store.data.settings.workspace||selected.codexPath!==store.data.settings.codexPath;
+        store.openConversation(selected.id);panel.messageView=null;resumed=false;listening=false;
+        if(contextChanged){codex.stop();connectionState='disconnected';modelCatalog.models=[];modelsStatus='idle';}
       }
-      return { ok: true };
-    } finally { historyLoading = false; publish(); }
+      if(selected.threadId&&selected.mode==='codex'&&!forcedDemo){
+        try{
+          if(opening)await codex.connect(store.data.settings.codexPath,store.data.settings.workspace);
+          const connectionProcess=codex.process,workspace=store.data.settings.workspace,executable=store.data.settings.codexPath,deadline=Date.now()+15000;
+          if(operation.canceled||quitting||panel!==owner||owner.isDestroyed()||event.sender.isDestroyed()||event.senderFrame!==event.sender.mainFrame||event.sender.mainFrame.detached||operation.generation!==owner.renderGeneration||systemSuspended||screenLocked||store.data.activeConversationId!==selected.id)throw Error('기록 조회를 취소했거나 대화·화면이 바뀌었습니다.');
+          if(opening){
+            const remoteId=(await codex.request('thread/read',{threadId:selected.threadId,includeTurns:false},Math.max(1,Math.min(10000,deadline-Date.now()))))?.thread?.id;
+            if(remoteId!==selected.threadId)throw Error('조회한 대화 ID가 일치하지 않습니다.');
+          }
+          if(operation.canceled||quitting||panel!==owner||owner.isDestroyed()||event.sender.isDestroyed()||event.senderFrame!==event.sender.mainFrame||event.sender.mainFrame.detached||operation.generation!==owner.renderGeneration||connectionProcess!==codex.process||workspace!==store.data.settings.workspace||executable!==store.data.settings.codexPath||systemSuspended||screenLocked||store.data.activeConversationId!==selected.id||store.pendingDeletion?.ids.includes(selected.id))throw Error('기록 조회 중 대화나 연결이 바뀌었습니다.');
+          const previous=store.data.messages,continuation=opening?null:remoteHistory,cursor=continuation?.cursor??null,seenTurns=new Set(continuation?.seenTurns??[]),seenCursors=new Set(continuation?.seenCursors??[]);
+          let page,paging=true;
+          try{page=await codex.request('thread/turns/list',{threadId:selected.threadId,limit:25,sortDirection:'desc',itemsView:'full',...(cursor?{cursor}:{})},Math.max(1,Math.min(10000,deadline-Date.now())));}
+          catch(error){
+            if(!opening||error.code!==-32601)throw error;
+            if(operation.canceled||quitting||panel!==owner||owner.isDestroyed()||event.senderFrame!==event.sender.mainFrame||operation.generation!==owner.renderGeneration||connectionProcess!==codex.process||systemSuspended||screenLocked)throw Error('기록 조회 중 대화나 연결이 바뀌었습니다.');
+            paging=false;page=await codex.request('thread/read',{threadId:selected.threadId,includeTurns:true},Math.max(1,Math.min(10000,deadline-Date.now())));
+            if(page?.thread?.id!==selected.threadId||!Array.isArray(page.thread.turns))throw Error('조회한 대화 ID·기록 형식이 일치하지 않습니다.');
+          }
+          if(operation.canceled||quitting||panel!==owner||owner.isDestroyed()||event.sender.isDestroyed()||event.senderFrame!==event.sender.mainFrame||event.sender.mainFrame.detached||operation.generation!==owner.renderGeneration||connectionProcess!==codex.process||workspace!==store.data.settings.workspace||executable!==store.data.settings.codexPath||systemSuspended||screenLocked||store.data.activeConversationId!==selected.id||store.data.messages!==previous||store.pendingDeletion?.ids.includes(selected.id))throw Error('기록 조회 중 대화나 연결이 바뀌었습니다.');
+          const turns=paging?page?.data:page.thread.turns,nextCursor=paging?page?.nextCursor??null:null;
+          if(!Array.isArray(turns)||paging&&turns.length>25)throw Error('Codex 기록 페이지 형식을 확인해주세요.');
+          if(nextCursor!==null&&(typeof nextCursor!=='string'||!nextCursor||nextCursor.length>8192||seenCursors.has(nextCursor)||nextCursor===cursor||!turns.length))throw Error('Codex 기록 페이지의 다음 위치가 올바르지 않습니다.');
+          if(seenCursors.size>=2048)throw Error('기록 조회 한도에 도달했습니다. 저장된 기록을 확인해주세요.');
+          const byTurn=new Map(),byId=new Map(),byText=new Map(),records=[],pageTurns=new Set();let previousIndex=0,recordBytes=0;
+          for(let i=0;i<previous.length;i++){
+            const message=previous[i];if(message.role!=='user')continue;
+            if(message.turnId){if(byTurn.has(message.turnId))throw Error('저장된 턴 연결이 중복됩니다. 원본을 유지합니다.');byTurn.set(message.turnId,i);}
+            byId.set(message.id,i);if(!byText.has(message.text))byText.set(message.text,{indices:[],next:0,legacy:false});const matches=byText.get(message.text);matches.indices.push(i);if(!message.turnId)matches.legacy=true;
+          }
+          for(const turn of paging?[...turns].reverse():turns){
+            if(Date.now()>=deadline)throw Error('기록 조회 한도에 도달했습니다. 저장된 기록을 확인해주세요.');
+            if(!turn||typeof turn.id!=='string'||!turn.id||turn.id.length>200||!Array.isArray(turn.items)||!['completed','failed','interrupted','inProgress'].includes(turn.status)||(paging?turn.itemsView!=='full':turn.itemsView!==undefined&&turn.itemsView!=='full'))throw Error('Codex 전체 턴 기록 형식을 확인해주세요.');
+            for(const item of turn.items){if(!item||typeof item.type!=='string')throw Error('Codex 항목 형식을 확인해주세요.');if(['agentMessage','plan'].includes(item.type)&&typeof item.text!=='string'||['enteredReviewMode','exitedReviewMode'].includes(item.type)&&typeof item.review!=='string'||item.type==='userMessage'&&(!Array.isArray(item.content)||item.content.some(content=>!content||typeof content.type!=='string'||content.type==='text'&&typeof content.text!=='string')))throw Error('Codex 대화 텍스트 형식을 확인해주세요.');}
+            if(pageTurns.has(turn.id))continue;pageTurns.add(turn.id);
+            const input=turn.items.filter(item=>item.type==='userMessage').flatMap(item=>item.content??[]).find(item=>item.type==='text')?.text??'',remoteUserId=turn.items.find(item=>item.type==='userMessage')?.id,turnIndex=byTurn.get(turn.id),itemIndex=byId.get(remoteUserId);
+            if(turnIndex!==undefined&&itemIndex!==undefined&&turnIndex!==itemIndex||itemIndex!==undefined&&previous[itemIndex].turnId&&previous[itemIndex].turnId!==turn.id)throw Error('Codex 턴과 사용자 기록의 연결이 일치하지 않습니다.');
+            let oldIndex=turnIndex??itemIndex??-1;
+            if(oldIndex<0&&byText.has(input)){
+              const matches=byText.get(input);
+              if(paging){if(matches.legacy)throw Error('이전 버전 기록의 연결을 확인할 수 없어 원본을 유지합니다.');}
+              else{while(matches.next<matches.indices.length&&(matches.indices[matches.next]<previousIndex||previous[matches.indices[matches.next]].turnId))matches.next++;oldIndex=matches.indices[matches.next++]??-1;}
+            }
+            const oldUser=oldIndex>=0?previous[oldIndex]:null,oldReply=oldIndex>=0&&previous[oldIndex+1]?.role==='assistant'?previous[oldIndex+1]:null;
+            if(oldReply?.turnId&&oldReply.turnId!==turn.id)throw Error('Codex 답변과 사용자 기록의 연결이 일치하지 않습니다.');
+            if(oldIndex>=0)previousIndex=oldIndex+1;
+            if(!input&&!oldUser)continue;
+            const review=turn.items.findLast(item=>item.type==='exitedReviewMode'&&item.review.trim()),output=(review?.review??turn.items.filter(item=>['agentMessage','plan'].includes(item.type)).map(item=>item.text).join('\n\n')).slice(0,100000),status=turn.status==='completed'?'completed':turn.status==='failed'?'failed':'interrupted';
+            const timestamp=Number.isFinite(turn.startedAt)&&turn.startedAt>=0?(turn.startedAt<1e12?turn.startedAt*1000:turn.startedAt):null,images=[];
+            for(const item of turn.items){if(images.length>=8)break;if(item.type==='imageGeneration'||item.type==='mcpToolCall'&&Array.isArray(item.result?.content)&&item.result.content.some(content=>content?.type==='image'))images.push(...await responseImages.capture(item,{workspace,threadId:selected.threadId}));}
+            if(operation.canceled||quitting||panel!==owner||owner.isDestroyed()||event.sender.isDestroyed()||event.senderFrame!==event.sender.mainFrame||event.sender.mainFrame.detached||operation.generation!==owner.renderGeneration||connectionProcess!==codex.process||workspace!==store.data.settings.workspace||executable!==store.data.settings.codexPath||systemSuspended||screenLocked||store.data.activeConversationId!==selected.id||store.data.messages!==previous||store.pendingDeletion?.ids.includes(selected.id))throw Error('기록 조회 중 대화나 연결이 바뀌었습니다.');
+            const user={...oldUser,id:oldUser?.id??`${turn.id}:user`,turnId:turn.id,role:'user',text:oldUser?.text??input,mode:'codex',status,createdAt:oldUser?.createdAt??timestamp??selected.createdAt},block=[user];
+            if(output||oldReply||images.length)block.push({...oldReply,id:oldReply?.id??`${turn.id}:reply`,turnId:turn.id,role:'assistant',text:output||oldReply?.text||'',...(images.length?{images:images.slice(0,8)}:{}),mode:'codex',status,createdAt:oldReply?.createdAt??user.createdAt});
+            for(const message of block)recordBytes+=Buffer.byteLength(JSON.stringify(message))+1;
+            if(recordBytes>32*1024*1024)throw Error('병합 기록이 저장 용량을 초과합니다. 저장된 기록을 유지합니다.');
+            records.push({oldIndex,block,timestamp});
+          }
+          if(nextCursor&&turns.every(turn=>seenTurns.has(turn.id)))throw Error('Codex 기록 페이지가 앞으로 진행하지 않습니다. 저장된 기록을 유지합니다.');
+          const replacements=new Map(),insertions=new Map(),nextAnchors=new Array(records.length),boundary=continuation?.oldestMessageId?previous.findIndex(message=>message.id===continuation.oldestMessageId):-1;let nextAnchor=-1,lastAnchor=-1,lastPosition=-1;
+          for(let i=records.length-1;i>=0;i--){nextAnchors[i]=nextAnchor;if(records[i].oldIndex>=0)nextAnchor=records[i].oldIndex;}
+          for(let i=0;i<records.length;i++){
+            const record=records[i];let position=record.oldIndex;
+            if(position>=0){if(position<lastAnchor||replacements.has(position))throw Error('Codex 기록의 순서·연결이 일치하지 않습니다.');lastAnchor=position;replacements.set(position,record.block);}
+            else{
+              if(nextAnchors[i]>=0)position=nextAnchors[i];
+              else if(boundary>=0)position=boundary;
+              else if(record.timestamp!==null){position=previous.findIndex(message=>message.role==='user'&&message.createdAt>record.timestamp);if(position<0)position=previous.length;}
+              else if(lastAnchor>=0)position=lastAnchor+(previous[lastAnchor+1]?.role==='assistant'?2:1);
+              else if(!previous.length)position=0;
+              else throw Error('이전 기록의 시간·연결 위치를 확인할 수 없어 원본을 유지합니다.');
+              if(!insertions.has(position))insertions.set(position,[]);insertions.get(position).push(...record.block);
+            }
+            if(position<lastPosition)throw Error('Codex 기록의 순서가 일치하지 않습니다. 원본을 유지합니다.');lastPosition=position;
+          }
+          const messages=[];
+          for(let i=0;i<=previous.length;i++){
+            if(insertions.has(i))for(const message of insertions.get(i))messages.push(message);
+            if(i===previous.length)break;
+            if(replacements.has(i)){messages.push(...replacements.get(i));if(previous[i+1]?.role==='assistant')i++;}else messages.push(previous[i]);
+          }
+          const ids=new Set();for(const message of messages){if(ids.has(message.id))throw Error('병합 기록의 ID가 중복됩니다. 원본을 유지합니다.');ids.add(message.id);}
+          if(Buffer.byteLength(JSON.stringify({id:selected.id,source:'onggi_bot',threadId:selected.threadId,messages}))>32*1024*1024)throw Error('병합 기록이 저장 용량을 초과합니다. 저장된 기록을 유지합니다.');
+          if(operation.canceled||quitting||panel!==owner||owner.isDestroyed()||event.sender.isDestroyed()||event.senderFrame!==event.sender.mainFrame||event.sender.mainFrame.detached||operation.generation!==owner.renderGeneration||connectionProcess!==codex.process||workspace!==store.data.settings.workspace||executable!==store.data.settings.codexPath||systemSuspended||screenLocked||store.data.activeConversationId!==selected.id||store.data.messages!==previous||store.pendingDeletion?.ids.includes(selected.id))throw Error('기록 조회 중 대화나 연결이 바뀌었습니다.');
+          if(records.length){operation.committing=true;publish(true);store.data.messages=messages;try{await store.saveAsync();}catch(error){if(!store.writeBlocked)store.data.messages=previous;throw error;}}
+          if(!operation.canceled&&!quitting&&panel===owner&&!owner.isDestroyed()&&!event.sender.isDestroyed()&&event.senderFrame===event.sender.mainFrame&&!event.sender.mainFrame.detached&&operation.generation===owner.renderGeneration&&connectionProcess===codex.process&&workspace===store.data.settings.workspace&&executable===store.data.settings.codexPath&&!systemSuspended&&!screenLocked&&store.data.activeConversationId===selected.id&&!store.pendingDeletion?.ids.includes(selected.id)){
+            for(const turn of turns)seenTurns.add(turn.id);if(nextCursor)seenCursors.add(nextCursor);
+            remoteHistory=paging?{conversationId:selected.id,process:connectionProcess,generation:operation.generation,cursor:nextCursor,seenCursors,seenTurns,oldestMessageId:records[0]?.block[0].id??continuation?.oldestMessageId??null}:null;
+            if(!opening){panel.messageLimit=messages.length;panel.expandedHistory=true;}
+          }
+          connectionState='connected';
+        }catch(error){historyWarning=store.writeBlocked?`원격 기록 병합을 확정하지 못했습니다. 현재 화면·원본·저널을 보존합니다: ${error.message}`:`저장된 기록을 표시합니다. Codex 기록 확인: ${error.message}`;}
+      }
+      return{ok:true,canceled:operation.canceled};
+    }finally{if(historyRequest===operation){historyRequest=null;historyLoading=false;}publish(true);}
   }
   if (action === 'refresh-models') { if (historyLoading) throw new Error('연결 설정·기록 처리 후 모델 목록을 확인해주세요.'); if (forcedDemo || store.data.settings.demo) return {ok:true}; await refreshModels(Boolean(payload.ifStale)); return { ok: true }; }
   if(action==='recover-connection'||action==='find-cli'){
@@ -965,8 +1160,9 @@ ipcMain.handle('action', async (event, action, payload = {}) => {
     if(owner!==panel||screenLocked||systemSuspended)throw Error('대화창에서 이미지를 선택해주세요.');
     const conversationId=store.data.activeConversationId,message=store.data.messages.find(item=>item.id===payload.messageId&&item.role==='assistant'),image=message?.images?.find(item=>item.id===payload.imageId&&item.status==='ready');
     if(!image)throw Error('이 대화의 생성 이미지를 찾지 못했어요.');
-    const result=responseImages.read(image),extension=image.mime.split('/')[1],name='버디-이미지-'+image.id.slice(0,8)+'.'+extension;
+    const extension=image.mime.split('/')[1],name='버디-이미지-'+image.id.slice(0,8)+'.'+extension;
     if(action==='copy-response-image'){
+      const result=responseImages.read(image);
       const bitmap=nativeImage.createFromBuffer(result.bytes);if(bitmap.isEmpty()||bitmap.getSize().width!==image.width||bitmap.getSize().height!==image.height)throw Error('복사할 이미지가 손상됐어요. 원본을 확인해주세요.');
       await clipboard.write([new ClipboardItem({'image/png':new Blob([bitmap.toPNG()],{type:'image/png'})})]);return{ok:true};
     }
@@ -989,24 +1185,26 @@ ipcMain.handle('action', async (event, action, payload = {}) => {
       return{ok:true};
     }
     if(attachmentPicking||queueEdit?.saving||historyLoading||preparing||store.writeBlocked)throw Error('현재 준비 작업을 마친 뒤 다시 첨부해주세요.');
-    const editingJobId=queueEdit?.id??null;if(pendingAttachments.size>=128)throw Error('첨부 초안을 정리해주세요.');attachmentPicking=true;publish(true);
+    if(owner!==panel||owner.isDestroyed()||event.sender.isDestroyed()||event.senderFrame!==event.sender.mainFrame||event.sender.mainFrame.detached||requestGeneration!==owner.renderGeneration)throw Error('대화창 상태가 바뀌었어요. 다시 첨부해주세요.');
+    const workspace=store.data.settings.workspace,editingJobId=queueEdit?.id??null;if(pendingAttachments.size>=128)throw Error('첨부 초안을 정리해주세요.');attachmentPicking=true;publish(true);
     try{
-      const attachments=await attachmentStore.import([{name,bytes:result.bytes}],{imagesOnly:true});
-      if(quitting||owner.isDestroyed()||conversationId!==store.data.activeConversationId||(queueEdit?.id??null)!==editingJobId||systemSuspended||screenLocked)throw Error('대화 상태가 바뀌었어요. 다시 첨부해주세요.');
+      const attachments=await attachmentStore.import([{name,bytes:responseImages.read(image).bytes}],{imagesOnly:true});
+      if(quitting||panel!==owner||owner.isDestroyed()||event.sender.isDestroyed()||event.senderFrame!==event.sender.mainFrame||event.sender.mainFrame.detached||requestGeneration!==owner.renderGeneration||conversationId!==store.data.activeConversationId||workspace!==store.data.settings.workspace||(queueEdit?.id??null)!==editingJobId||systemSuspended||screenLocked)throw Error('대화 상태가 바뀌었어요. 다시 첨부해주세요.');
       for(const attachment of attachments)pendingAttachments.set(attachment.id,{attachment:Object.freeze(attachment),conversationId,createdAt:Date.now(),editingJobId});return{ok:true,attachments,conversationId};
     }finally{attachmentPicking=false;publish(true);}
   }
   if(action==='pick-attachments'){
-    if(owner!==panel||queueEdit?.saving||historyLoading||preparing||systemSuspended||screenLocked||store.writeBlocked)throw Error('대화창에서 준비 작업을 마친 뒤 첨부를 선택해주세요.');
+    if(owner!==panel||owner.isDestroyed()||event.sender.isDestroyed()||event.senderFrame!==event.sender.mainFrame||event.sender.mainFrame.detached||requestGeneration!==owner.renderGeneration||queueEdit?.saving||historyLoading||preparing||systemSuspended||screenLocked||store.writeBlocked)throw Error('대화창에서 준비 작업을 마친 뒤 첨부를 선택해주세요.');
     const conversationId=store.data.activeConversationId,workspace=store.data.settings.workspace,editingJobId=queueEdit?.id??null;attachmentPicking=true;publish(true);
     try{
       for(const [id,record]of pendingAttachments)if(Date.now()-record.createdAt>3600000&&!reservedAttachments.has(id))pendingAttachments.delete(id);
       if(pendingAttachments.size>=128)throw Error('사용하지 않는 첨부를 제거한 뒤 다시 선택해주세요.');
       const selected=await dialog.showOpenDialog(panel,{title:payload.kind==='image'?'이미지 첨부':'파일 첨부',properties:['openFile','multiSelections'],...(payload.kind==='image'?{filters:[{name:'이미지',extensions:['png','jpg','jpeg','webp']}]}:{})});
+      if(quitting||panel!==owner||owner.isDestroyed()||event.sender.isDestroyed()||event.senderFrame!==event.sender.mainFrame||event.sender.mainFrame.detached||requestGeneration!==owner.renderGeneration||conversationId!==store.data.activeConversationId||workspace!==store.data.settings.workspace||(queueEdit?.id??null)!==editingJobId||systemSuspended||screenLocked)throw Error('대화가 바뀌었어요. 새 대화에서 다시 첨부해주세요.');
       if(selected.canceled)return{ok:true,attachments:[]};
       if(selected.filePaths.length+pendingAttachments.size>128)throw Error('사용하지 않는 첨부를 제거한 뒤 다시 선택해주세요.');
       const attachments=await attachmentStore.import(selected.filePaths,{imagesOnly:payload.kind==='image'});
-      if(quitting||owner.isDestroyed()||conversationId!==store.data.activeConversationId||workspace!==store.data.settings.workspace||(queueEdit?.id??null)!==editingJobId||systemSuspended||screenLocked)throw Error('대화가 바뀌었어요. 새 대화에서 다시 첨부해주세요.');
+      if(quitting||panel!==owner||owner.isDestroyed()||event.sender.isDestroyed()||event.senderFrame!==event.sender.mainFrame||event.sender.mainFrame.detached||requestGeneration!==owner.renderGeneration||conversationId!==store.data.activeConversationId||workspace!==store.data.settings.workspace||(queueEdit?.id??null)!==editingJobId||systemSuspended||screenLocked)throw Error('대화가 바뀌었어요. 새 대화에서 다시 첨부해주세요.');
       for(const attachment of attachments)pendingAttachments.set(attachment.id,{attachment:Object.freeze(attachment),conversationId,createdAt:Date.now(),editingJobId});
       return{ok:true,attachments};
     }finally{attachmentPicking=false;publish(true);}
@@ -1065,7 +1263,7 @@ ipcMain.handle('action', async (event, action, payload = {}) => {
   }
   if (action === 'activity') { listening = Boolean(payload.listening); publish(); return { ok: true }; }
   if (action === 'show-panel') { showPanel(payload.tab,payload.full===true); return { ok: true }; }
-  if (action === 'hide-panel') { panel.hide(); listening = false; publish(); return { ok: true }; }
+  if (action === 'hide-panel') { clearTimeout(simpleHideTimer);simpleHideTimer=null;simpleHideDeadline=null;panel.simpleReady=false;panelResize=null;panel.hide(); listening = false; publish(); return { ok: true }; }
   if (action === 'drag-start' || action === 'drag-move' || action === 'drag-end') {
     if (event.sender !== pet.webContents) throw new Error('캐릭터에서만 이동할 수 있습니다.');
     if (action === 'drag-end') { petDrag = null; store.save({includeHistory:false}); return {ok:true}; }
@@ -1188,7 +1386,7 @@ ipcMain.handle('action', async (event, action, payload = {}) => {
     const previous = store.data.settings, next = { ...previous };
     for (const key of ['skinId','chatMode','appearanceProfile','characterScale','approvalDisplay','quietStart','quietEnd','fontScale','miniSize','sendKey','hotkey']) if (payload[key] !== undefined) next[key] = payload[key];
     for (const key of ['demo','reducedMotion','measureResponseTime','alwaysOnTop','batterySaver','notifyCompleted','notifyApproval','notifyFailed','notifyPreview','notifySound','quietHoursEnabled']) if (typeof payload[key] === 'boolean') next[key] = payload[key];
-    const shortcutChanged=next.hotkey!==undefined&&next.hotkey!==activeShortcut;
+    const shortcutChanged=payload.hotkey!==undefined&&next.hotkey!==activeShortcut;
     const shortcutNeedsRegistration=shortcutChanged||payload.hotkey!==undefined&&!store.shortcut;
     if(shortcutNeedsRegistration&&!globalShortcut.register(next.hotkey,()=>{pet.show();showPanel();}))throw Error('다른 앱에서 사용 중인 단축키예요. 기존 단축키 상태를 유지했어요.');
     try {
@@ -1221,7 +1419,7 @@ ipcMain.handle('action', async (event, action, payload = {}) => {
   }
   if (action === 'new-chat') {
     if (current || queue.length || preparing || historyLoading) throw new Error('실행과 대기 작업을 먼저 완료하거나 취소해주세요.');
-    store.newConversation();panel.messageView=null; resumed = false; historyWarning = null; publish(); return { ok: true };
+    remoteHistory=null;store.newConversation();panel.messageView=null; resumed = false; historyWarning = null; publish(); return { ok: true };
   }
   if (action === 'continue-queue') {
     if(owner!==panel||systemSuspended||screenLocked)throw Error('화면이 열린 상태에서 대기 질문을 계속해주세요.');
@@ -1261,20 +1459,20 @@ ipcMain.handle('action', async (event, action, payload = {}) => {
       while(store.saving)await store.saving;
       if(quitting||systemSuspended||screenLocked||packImporting||historyLoading||store.writeBlocked||messages!==store.data.messages||settings.workspace!==store.data.settings.workspace||settings.codexPath!==store.data.settings.codexPath||owner.isDestroyed()||event.senderFrame!==event.sender.mainFrame||store.pendingDeletion?.ids.includes(store.data.activeConversationId))throw Error('접수 중 대화 상태가 바뀌었습니다. 질문은 실행하지 않았습니다.');
       const selection=mode==='demo'?{model:null,effort:null,modelName:'체험'}:modelCatalog.resolve(settings.model,settings.effort,settings.serviceTier);
-    const pendingReplies = store.data.messages.filter(m => m.role === 'assistant' && ['queued','running'].includes(m.status)).length;
-    let storedBytes = 2;
-    for (const message of store.data.messages) {
-      let cached = messageSizeCache.get(message);
-      if (!cached || cached.text !== message.text) { cached={text:message.text,bytes:Buffer.byteLength(JSON.stringify(message.text))};messageSizeCache.set(message,cached); }
-      storedBytes += Buffer.byteLength(JSON.stringify({...message,text:undefined})) + cached.bytes + 9;
-    }
-    if (storedBytes + 700000 * (pendingReplies + 1) > 32 * 1024 * 1024) throw new Error('대화 저장 용량이 한도에 가까워졌습니다. 진행 중인 질문을 마친 뒤 새 대화를 시작해주세요.');
+      const pendingReplies = store.data.messages.filter(m => m.role === 'assistant' && ['queued','running'].includes(m.status)).length;
+      let storedBytes = 2;
+      for (const message of store.data.messages) {
+        let cached = messageSizeCache.get(message);
+        if (!cached || cached.text !== message.text) { cached={text:message.text,bytes:Buffer.byteLength(JSON.stringify(message.text))};messageSizeCache.set(message,cached); }
+        storedBytes += Buffer.byteLength(JSON.stringify({...message,text:undefined})) + cached.bytes + 9;
+      }
+      if (storedBytes + 700000 * (pendingReplies + 1) > 32 * 1024 * 1024) throw new Error('대화 저장 용량이 한도에 가까워졌습니다. 진행 중인 질문을 마친 뒤 새 대화를 시작해주세요.');
 
       listening=false;
       const timing=settings.measureResponseTime?{receivedAt,submittedAt:Number.isFinite(payload.submittedAt)&&Math.abs(payload.submittedAt-receivedAt)<60000?Math.min(payload.submittedAt,receivedAt):null,enqueuedAt:performance.timeOrigin+performance.now(),mode}:undefined;
       const personaMetadata=persona?{characterId:persona.characterId,id:persona.id,name:persona.name,hash:persona.hash}:null;
       const skillMetadata=skill?{name:skill.name,path:skill.path,hash:skill.hash}:null;
-      messages.push({id,role:'user',text,status:'queued',createdAt:Date.now(),mode,...selection,purpose,...(skillMetadata?{skill:skillMetadata}:{}),...(attachments.length?{attachments}:{})},{id:replyId,role:'assistant',text:'',status:'queued',createdAt:Date.now(),mode,...selection,purpose,persona:personaMetadata,...(skillMetadata?{skill:skillMetadata}:{}),...(timing?{timing}:{})});
+      remoteHistory=null;messages.push({id,role:'user',text,status:'queued',createdAt:Date.now(),mode,...selection,purpose,...(skillMetadata?{skill:skillMetadata}:{}),...(attachments.length?{attachments}:{})},{id:replyId,role:'assistant',text:'',status:'queued',createdAt:Date.now(),mode,...selection,purpose,persona:personaMetadata,...(skillMetadata?{skill:skillMetadata}:{}),...(timing?{timing}:{})});
       try{await store.saveAsync();}catch(error){if(!store.writeBlocked){for(let i=messages.length-1;i>=0;i--)if(messages[i].id===id||messages[i].id===replyId)messages.splice(i,1);}else for(const message of messages)if([id,replyId].includes(message.id))message.status='interrupted';publish(true);throw error;}
       for(const record of pendingAttachments.values())if(record.conversationId===null)record.conversationId=store.data.activeConversationId;
       if(quitting||systemSuspended||screenLocked||[...queuePauses].some(reason=>reason!=='manual')&&queue.length||store.writeBlocked||owner.isDestroyed()||event.senderFrame!==event.sender.mainFrame){
@@ -1357,7 +1555,7 @@ app.on('before-quit', event => {
   if (quitSaved) return;
   event.preventDefault();
   if (quitting) return;
-  quitting = true;for(const {notification}of liveNotices.values())try{notification.close();}catch{}liveNotices.clear(); clearTimeout(current?.timeout); current?.resolve?.(); clearTimeout(replyStateTimer); clearInterval(petPointerTimer); globalShortcut.unregisterAll();
+  quitting = true;clearTimeout(simpleHideTimer);simpleHideTimer=null;simpleHideDeadline=null;panelResize=null;for(const {notification}of liveNotices.values())try{notification.close();}catch{}liveNotices.clear(); clearTimeout(current?.timeout); current?.resolve?.(); clearTimeout(replyStateTimer); clearInterval(petPointerTimer); globalShortcut.unregisterAll();
   clearTimeout(reconnectTimer);connectionSetup.dispose();connectionProbe?.stop();
   codex.stop();
   void (async () => {

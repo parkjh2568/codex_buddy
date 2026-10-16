@@ -54,3 +54,48 @@ test('SVG styles, prefixed active elements and event attributes are rejected wit
   for(const content of ['<style>@keyframes flash{to{fill:red}}</style>','<rect style="animation:flash 1s infinite"/>','<s:style xmlns:s="http://www.w3.org/2000/svg"/>','<s:animate xmlns:s="http://www.w3.org/2000/svg"/>','<rect onload="run()"/>']){const svg='<svg xmlns="http://www.w3.org/2000/svg">'+content+'</svg>';fs.writeFileSync(path.join(root,'idle.svg'),svg);assert.throws(()=>loadPack(root),/SVG/);assert.equal(fs.readFileSync(path.join(root,'idle.svg'),'utf8'),svg);}
   fs.writeFileSync(path.join(root,'idle.svg'),'<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10" fill="red"/></svg>');assert.ok(loadPack(root).assets.idle);
 });
+
+test('pack, persona and skin IDs reject coerced non-string values before library initialization',t=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'buddy-id-types-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+  const directory=path.join(root,'pack');fs.cpSync(path.join(__dirname,'../characters/onggi-clip'),directory,{recursive:true});
+  const manifest=JSON.parse(fs.readFileSync(path.join(directory,'manifest.json'),'utf8'));
+  for(const id of [undefined,null,true,123,['array-id'],{toString:'valid-id'}]){
+    fs.writeFileSync(path.join(directory,'manifest.json'),JSON.stringify({...manifest,id}));assert.throws(()=>loadPack(directory),/형식/);
+    const candidate=structuredClone(manifest);candidate.personas.modes[0].id=id;
+    fs.writeFileSync(path.join(directory,'manifest.json'),JSON.stringify(candidate));assert.throws(()=>loadPack(directory),/페르소나/);
+  }
+  fs.writeFileSync(path.join(directory,'manifest.json'),JSON.stringify(manifest));assert.ok(new PersonaLibrary(path.join(root,'personas'),[loadPack(directory)]).resolve(manifest.id,'friendly','버디'));
+  const skins=path.join(root,'skins');fs.mkdirSync(skins);const paper=JSON.parse(fs.readFileSync(path.join(__dirname,'../skins/paper.json'),'utf8'));
+  for(const id of [undefined,null,true,['paper']]){fs.writeFileSync(path.join(skins,'paper.json'),JSON.stringify({...paper,id}));assert.throws(()=>loadSkins(skins),/스킨/);}
+  fs.writeFileSync(path.join(skins,'paper.json'),'null');assert.throws(()=>loadSkins(skins),/스킨/);
+  fs.writeFileSync(path.join(skins,'paper.json'),JSON.stringify({...paper,colors:{...paper.colors,cream:[paper.colors.cream]}}));assert.throws(()=>loadSkins(skins),/스킨/);
+  const {PackLibrary}=require('../src/pack-library.cjs'),library=new PackLibrary(root),journal={version:1,phase:'prepared',operation:'install',id:'pack-id',stage:'.stage-'+require('node:crypto').randomUUID(),backup:'.archive-'+require('node:crypto').randomUUID(),oldRevision:null,newRevision:'a'.repeat(64),before:{characterId:'onggi-clip',personaModes:{}},createdPersonas:[],personaDirectoryCreated:true};
+  for(const candidate of [{...journal,id:['pack-id']},{...journal,before:{...journal.before,characterId:null}},{...journal,createdPersonas:[{id:['friendly'],hash:'a'.repeat(64)}]},{...journal,newRevision:['a'.repeat(64)]}]){
+    fs.writeFileSync(library.journal,JSON.stringify(candidate));assert.throws(()=>library.recover({writeBlocked:false}),/복구/);assert.deepEqual(JSON.parse(fs.readFileSync(library.journal,'utf8')),candidate);
+  }
+});
+
+test('failed pack export preserves added, modified, replaced and partially written files',t=>{
+  const {PackLibrary}=require('../src/pack-library.cjs'),root=fs.mkdtempSync(path.join(os.tmpdir(),'buddy-export-failure-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+  const library=new PackLibrary(root),pack=loadPack(path.join(__dirname,'../characters/onggi-clip')),exportRoot=path.join(root,'exports');fs.mkdirSync(exportRoot);const parent=fs.realpathSync(exportRoot);
+  const exported=library.export(pack,parent);assert.equal(loadPack(exported).revision,pack.revision);
+  const write=fs.writeFileSync,open=fs.openSync;let destination,scenario;
+  t.mock.method(fs,'openSync',(file,...args)=>{if(typeof file==='string'&&file.startsWith(parent+path.sep)&&path.basename(file)==='manifest.json')destination=path.dirname(file);if(scenario==='normal'&&typeof file==='string'&&file===path.join(destination,pack.contents.keys().next().value))throw Error('fixture disk full');return open(file,...args);});
+  t.mock.method(fs,'writeFileSync',(file,bytes,...args)=>{
+    if(typeof file==='number'&&Buffer.isBuffer(bytes)&&bytes.equals(pack.contents.values().next().value)){
+      if(scenario==='added')write(path.join(destination,'user-note.txt'),'외부에서 추가한 내용');
+      if(scenario==='modified')write(path.join(destination,'manifest.json'),'수정한 내용');
+      if(scenario==='replaced'){fs.renameSync(path.join(destination,'manifest.json'),path.join(destination,'original.json'));write(path.join(destination,'manifest.json'),'교체한 내용');}
+      if(scenario==='partial')write(file,Buffer.from('partial'));
+      throw Error('fixture disk full');
+    }
+    return write(file,bytes,...args);
+  });
+  for(scenario of ['normal','added','modified','replaced','partial']){
+    assert.throws(()=>library.export(pack,parent),scenario==='normal'?/disk full/:/보존/);
+    if(scenario==='normal'){assert.equal(fs.existsSync(destination),false);continue;}
+    if(scenario==='added')assert.equal(fs.readFileSync(path.join(destination,'user-note.txt'),'utf8'),'외부에서 추가한 내용');
+    if(scenario==='modified'||scenario==='replaced')assert.equal(fs.readFileSync(path.join(destination,'manifest.json'),'utf8'),scenario==='modified'?'수정한 내용':'교체한 내용');
+    if(scenario==='partial')assert.ok(fs.readdirSync(destination,{recursive:true}).some(file=>fs.statSync(path.join(destination,file)).isFile()&&fs.readFileSync(path.join(destination,file),'utf8')==='partial'));
+  }
+});

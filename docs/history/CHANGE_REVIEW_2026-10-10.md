@@ -1,6 +1,8 @@
 # my_budy alpha15 변경 코드 검토
 
-이 문서는 수정 전 alpha15의 코드 위치와 재현 결과를 기록한다. 현재 수정·검증·추가 종료 예외는 [alpha16 수정 결과](/Users/jhpark/code/my_budy/docs/CHANGE_REMEDIATION_RESULT_2026-10-10.md)를 따른다.
+이 문서는 수정 전 alpha15의 코드 위치와 재현 결과를 기록한다. 현재 수정·검증·추가 종료 예외는 [alpha16 수정 결과](CHANGE_REMEDIATION_RESULT_2026-10-10.md)를 따른다.
+
+2026-10-12 정리에서 당시 ignored 재현 코드 원본은 [복구 압축본](../../artifacts/legacy-cleanup-2026-10-12/cleanup-targets.tar.gz)에 보관했다. [원래 경로·해시 목록](../../artifacts/legacy-cleanup-2026-10-12/removal-manifest.json)을 대조해 빈 폴더에 선택 복구한 뒤 당시 소스와 함께 사용한다.
 
 2026년 10월 10일의 변경 코드에서 P2 이슈 6건과 P3 복구 편의성 이슈 1건을 확인했다. 가장 먼저 보완할 부분은 대기 질문 편집 중 화면을 다시 로드했을 때 FIFO가 멈추는 경로다. 읽음 처리, 사용량 응답 순서, 도구 거절 상태, 본문 검색과 승인 알림에도 예외 처리가 필요하다. 기존 검사 통과와 이 예외 경로의 정확성은 구분해야 한다.
 
@@ -8,23 +10,23 @@
 
 ## 확인된 이슈와 우선순위
 
-P2는 특정 사용 흐름에서 동작이나 표시가 잘못되는 수정 대상이며, P3는 복구 편의성 보완 대상이다. 아래 7건을 8개 경계 사례로 재현했다. 재현은 현재 소스 함수와 기존 VM 하네스를 이용했으며 실제 모델 호출이나 OS 입력 검사는 포함하지 않는다. [재현 코드](/Users/jhpark/code/my_budy/artifacts/change-review-repro.cjs), [결과와 소스 해시](/Users/jhpark/code/my_budy/artifacts/change-review-repro.json), [실행 로그](/Users/jhpark/code/my_budy/artifacts/change-review-repro.log).
+P2는 특정 사용 흐름에서 동작이나 표시가 잘못되는 수정 대상이며, P3는 복구 편의성 보완 대상이다. 아래 7건을 8개 경계 사례로 재현했다. 재현은 현재 소스 함수와 기존 VM 하네스를 이용했으며 실제 모델 호출이나 OS 입력 검사는 포함하지 않는다. [재현 코드](../../artifacts/legacy-cleanup-2026-10-12/cleanup-targets.tar.gz), [결과와 소스 해시](../../artifacts/change-review-repro.json), [실행 로그](../../artifacts/change-review-repro.log).
 
 | 순서 | ID | 우선순위 | 문제 | 주요 위치 |
 |---|---|---|---|---|
-| 1 | R01 | P2 | 편집 중 정상 화면 복구 후 편집 예약이 남아 FIFO 정지 | [main.cjs:481](/Users/jhpark/code/my_budy/src/main.cjs:481) |
-| 2 | R02 | P2 | 스크롤 화면 밖의 새 답변도 읽음 처리 | [renderer.mjs:90](/Users/jhpark/code/my_budy/src/ui/renderer.mjs:90) |
-| 3 | R03 | P2 | 오래된 사용량 조회 응답이 계정 변경 또는 최신 이벤트를 덮어씀 | [connection-setup.cjs:37](/Users/jhpark/code/my_budy/src/connection-setup.cjs:37) |
-| 4 | R04 | P2 | 승인 거절된 도구를 완료로 표시 | [main.cjs:342](/Users/jhpark/code/my_budy/src/main.cjs:342) |
-| 5 | R06 | P2 | 검색 중 입력을 바꾸면 이전 검색 결과가 새 검색어 화면에 표시 | [renderer.mjs:589](/Users/jhpark/code/my_budy/src/ui/renderer.mjs:589) |
-| 6 | R07 | P2 | 이미 해결된 승인 요청의 알림이 뒤늦게 표시 | [main.cjs:131](/Users/jhpark/code/my_budy/src/main.cjs:131) |
-| 7 | R05 | P3 | 등록 실패한 동일 단축키의 재등록 경로 부족 | [main.cjs:1140](/Users/jhpark/code/my_budy/src/main.cjs:1140) |
+| 1 | R01 | P2 | 편집 중 정상 화면 복구 후 편집 예약이 남아 FIFO 정지 | [main.cjs:481](../../src/main.cjs:481) |
+| 2 | R02 | P2 | 스크롤 화면 밖의 새 답변도 읽음 처리 | [renderer.mjs:90](../../src/ui/renderer.mjs:90) |
+| 3 | R03 | P2 | 오래된 사용량 조회 응답이 계정 변경 또는 최신 이벤트를 덮어씀 | [connection-setup.cjs:37](../../src/connection-setup.cjs:37) |
+| 4 | R04 | P2 | 승인 거절된 도구를 완료로 표시 | [main.cjs:342](../../src/main.cjs:342) |
+| 5 | R06 | P2 | 검색 중 입력을 바꾸면 이전 검색 결과가 새 검색어 화면에 표시 | [renderer.mjs:589](../../src/ui/renderer.mjs:589) |
+| 6 | R07 | P2 | 이미 해결된 승인 요청의 알림이 뒤늦게 표시 | [main.cjs:131](../../src/main.cjs:131) |
+| 7 | R05 | P3 | 등록 실패한 동일 단축키의 재등록 경로 부족 | [main.cjs:1140](../../src/main.cjs:1140) |
 
 ### R01 편집 중 화면 복구 후 FIFO 정지
 
-대기 질문의 수정을 시작하면 `queueEdit`과 `job.editing`이 생긴다. 트레이의 화면 복구는 [main.cjs:548](/Users/jhpark/code/my_budy/src/main.cjs:548)에서 `webContents.reload()`를 호출한다. 정상 reload의 `did-start-loading`은 렌더러 세대와 준비 상태만 변경한다. 편집 정리는 [main.cjs:491](/Users/jhpark/code/my_budy/src/main.cjs:491)의 `render-process-gone`과 저장 중 편집의 `finally`에만 있다.
+대기 질문의 수정을 시작하면 `queueEdit`과 `job.editing`이 생긴다. 트레이의 화면 복구는 [main.cjs:548](../../src/main.cjs:548)에서 `webContents.reload()`를 호출한다. 정상 reload의 `did-start-loading`은 렌더러 세대와 준비 상태만 변경한다. 편집 정리는 [main.cjs:491](../../src/main.cjs:491)의 `render-process-gone`과 저장 중 편집의 `finally`에만 있다.
 
-새 렌더러는 `queueEditingUI=null`에서 시작한다. [renderer.mjs:69](/Users/jhpark/code/my_budy/src/ui/renderer.mjs:69)의 편집 배너는 이 지역 변수에 의존하므로 숨겨진다. 메인에 남은 편집 예약 때문에 다른 수정 버튼은 막히고, [main.cjs:249](/Users/jhpark/code/my_budy/src/main.cjs:249)는 첫 질문의 `editing`을 보고 실행하지 않는다. 계속 버튼으로 보류 사유를 지워도 편집 예약은 해제되지 않는다.
+새 렌더러는 `queueEditingUI=null`에서 시작한다. [renderer.mjs:69](../../src/ui/renderer.mjs:69)의 편집 배너는 이 지역 변수에 의존하므로 숨겨진다. 메인에 남은 편집 예약 때문에 다른 수정 버튼은 막히고, [main.cjs:249](../../src/main.cjs:249)는 첫 질문의 `editing`을 보고 실행하지 않는다. 계속 버튼으로 보류 사유를 지워도 편집 예약은 해제되지 않는다.
 
 재현 결과는 렌더러 세대 2, 편집 세대 1, `editing=true`, 대기 1개, 실행 작업 없음, 보류 사유 없음이었다. 원래 질문은 보관되지만 사용자는 해당 질문을 취소하거나 앱을 다시 시작해야 빠져나올 수 있다.
 
@@ -32,7 +34,7 @@ P2는 특정 사용 흐름에서 동작이나 표시가 잘못되는 수정 대�
 
 ### R02 실제로 보지 않은 답변의 읽음 처리
 
-읽음 ACK 조건은 `getClientRects().length`다. 이는 요소에 레이아웃 영역이 있다는 확인이며 스크롤 컨테이너 안에서 보이는지 확인하지 않는다. 렌더러는 [renderer.mjs:524](/Users/jhpark/code/my_budy/src/ui/renderer.mjs:524)에서 사용자가 위쪽을 읽고 있으면 현재 스크롤을 유지한다. 아래쪽에 도착한 답변 카드도 레이아웃 영역은 있으므로 새 답변 표시가 사라질 수 있다.
+읽음 ACK 조건은 `getClientRects().length`다. 이는 요소에 레이아웃 영역이 있다는 확인이며 스크롤 컨테이너 안에서 보이는지 확인하지 않는다. 렌더러는 [renderer.mjs:524](../../src/ui/renderer.mjs:524)에서 사용자가 위쪽을 읽고 있으면 현재 스크롤을 유지한다. 아래쪽에 도착한 답변 카드도 레이아웃 영역은 있으므로 새 답변 표시가 사라질 수 있다.
 
 위치가 2000인 카드와 0부터 400까지의 화면을 구성한 함수 경계 재현에서 `notice-read`가 호출됐다. 또한 읽음 ACK는 이미지의 로드 확인보다 먼저 실행된다. 이미지 미리보기가 아직 표시되지 않은 경우의 정책도 함께 정해야 한다.
 
@@ -40,7 +42,7 @@ P2는 특정 사용 흐름에서 동작이나 표시가 잘못되는 수정 대�
 
 ### R03 계정 사용량의 오래된 응답 적용
 
-[connection-setup.cjs:13](/Users/jhpark/code/my_budy/src/connection-setup.cjs:13)은 계정 변경 때 기존 사용량을 지운다. 그러나 이미 진행 중인 `readUsage()`는 프로세스 객체가 같은지만 확인하고 결과를 적용한다. 같은 app-server에서 로그아웃이나 인증 변경이 발생하면 이전 조회 결과가 다시 `ready`로 들어올 수 있다.
+[connection-setup.cjs:13](../../src/connection-setup.cjs:13)은 계정 변경 때 기존 사용량을 지운다. 그러나 이미 진행 중인 `readUsage()`는 프로세스 객체가 같은지만 확인하고 결과를 적용한다. 같은 app-server에서 로그아웃이나 인증 변경이 발생하면 이전 조회 결과가 다시 `ready`로 들어올 수 있다.
 
 두 경로를 재현했다. 첫 경로는 조회 시작 후 `account/updated`의 `authMode=null`을 받고 이전 조회가 돌아오는 경우로, 로그인 필요 상태인데 사용량 23%가 준비 완료로 표시됐다. 두 번째는 조회 중 사용량 31% 이벤트를 받은 뒤 이전 조회의 23% 응답이 돌아오는 경우로, 최신 31%가 23%로 바뀌었다.
 
@@ -50,9 +52,9 @@ P2는 특정 사용 흐름에서 동작이나 표시가 잘못되는 수정 대�
 
 현재 도구 정보는 `item/completed`에서 `status==='failed'`만 실패로 보고 나머지를 완료로 만든다. 설치 CLI의 생성 스키마에서 명령 실행과 파일 변경 상태는 `inProgress`, `completed`, `failed`, `declined`를 허용한다. 따라서 사용자가 거절한 작업도 작업 정보에 완료로 표시된다.
 
-현재 이벤트 처리기에 `commandExecution/status=declined`를 전달한 재현에서 저장되는 진행 항목 상태는 `completed`였다. 이 표시는 파일 변경이나 명령이 실행됐다고 오해하게 할 수 있다. 프로토콜 항목의 종료와 작업의 성공은 따로 처리해야 한다. [공식 App Server 항목 설명](https://learn.chatgpt.com/docs/app-server)과 [설치 버전 상태 스키마](/Users/jhpark/code/my_budy/artifacts/onboarding-protocol-schema/v2/ThreadResumeResponse.json)를 대조했다.
+현재 이벤트 처리기에 `commandExecution/status=declined`를 전달한 재현에서 저장되는 진행 항목 상태는 `completed`였다. 이 표시는 파일 변경이나 명령이 실행됐다고 오해하게 할 수 있다. 프로토콜 항목의 종료와 작업의 성공은 따로 처리해야 한다. [공식 App Server 항목 설명](https://learn.chatgpt.com/docs/app-server)과 [설치 버전 상태 스키마](../../artifacts/onboarding-protocol-schema/v2/ThreadResumeResponse.json)를 대조했다.
 
-도구 상태 매핑을 기존 이벤트 분기 안에서 명시하고, 거절 상태를 저장 검증과 UI 문구에 함께 반영한다. 저장 복원 허용 목록은 [store.cjs:123](/Users/jhpark/code/my_budy/src/store.cjs:123), 표시 매핑은 [renderer.mjs:517](/Users/jhpark/code/my_budy/src/ui/renderer.mjs:517)에 있다. 회귀 기준은 명령과 파일 변경의 거절이 재시작 뒤에도 완료로 바뀌지 않는 것, 실패와 중단 상태를 각각 유지하는 것이다.
+도구 상태 매핑을 기존 이벤트 분기 안에서 명시하고, 거절 상태를 저장 검증과 UI 문구에 함께 반영한다. 저장 복원 허용 목록은 [store.cjs:123](../../src/store.cjs:123), 표시 매핑은 [renderer.mjs:517](../../src/ui/renderer.mjs:517)에 있다. 회귀 기준은 명령과 파일 변경의 거절이 재시작 뒤에도 완료로 바뀌지 않는 것, 실패와 중단 상태를 각각 유지하는 것이다.
 
 ### R06 본문 검색의 응답 순서
 
@@ -62,7 +64,7 @@ P2는 특정 사용 흐름에서 동작이나 표시가 잘못되는 수정 대�
 
 ### R07 이미 해결된 승인 알림
 
-승인 요청은 [main.cjs:404](/Users/jhpark/code/my_budy/src/main.cjs:404)에서 알림 이벤트를 넣는다. 실제 표시까지는 publish 묶음 처리 지연이 있다. 그 사이 `serverRequest/resolved`, 턴 종료 또는 연결 중단으로 요청이 없어져도 알림 이벤트는 남는다. 표시 단계는 현재 승인 요청의 존재를 확인하지 않는다.
+승인 요청은 [main.cjs:404](../../src/main.cjs:404)에서 알림 이벤트를 넣는다. 실제 표시까지는 publish 묶음 처리 지연이 있다. 그 사이 `serverRequest/resolved`, 턴 종료 또는 연결 중단으로 요청이 없어져도 알림 이벤트는 남는다. 표시 단계는 현재 승인 요청의 존재를 확인하지 않는다.
 
 승인 요청을 받은 뒤 해결 이벤트를 전달하고 publish를 실행한 재현에서 승인 대기 수가 0인데 확인 필요 알림이 한 번 표시됐다. OS 알림 자체는 모의 객체로 확인했다.
 
@@ -80,21 +82,21 @@ P2는 특정 사용 흐름에서 동작이나 표시가 잘못되는 수정 대�
 
 ### 이미지 조회의 불필요한 base64 변환
 
-[response-images.cjs:85](/Users/jhpark/code/my_budy/src/response-images.cjs:85)는 모든 조회에서 바이트와 base64 source를 함께 만든다. 이미지 복사와 저장, 내보내기, 모델에 전달할 이미지 파일 경로는 바이트 또는 파일 경로만 사용한다. 새 저장 기능은 선택 대화상자 전후 두 번 읽으므로 두 번의 base64 변환도 발생한다.
+[response-images.cjs:85](../../src/response-images.cjs:85)는 모든 조회에서 바이트와 base64 source를 함께 만든다. 이미지 복사와 저장, 내보내기, 모델에 전달할 이미지 파일 경로는 바이트 또는 파일 경로만 사용한다. 새 저장 기능은 선택 대화상자 전후 두 번 읽으므로 두 번의 base64 변환도 발생한다.
 
-16MiB 합성 PNG 캐시 표본을 8회 읽은 로컬 측정에서 원본 바이트 128MiB 외에 base64 문자열 178,957,168자가 만들어졌고 조회 합계는 약 135ms였다. 이는 동시 상주 메모리량이나 실제 export 시간의 측정이 아니다. decode와 OS UI도 측정하지 않았다. [측정 결과](/Users/jhpark/code/my_budy/artifacts/change-review-image-read.json).
+16MiB 합성 PNG 캐시 표본을 8회 읽은 로컬 측정에서 원본 바이트 128MiB 외에 base64 문자열 178,957,168자가 만들어졌고 조회 합계는 약 135ms였다. 이는 동시 상주 메모리량이나 실제 export 시간의 측정이 아니다. decode와 OS UI도 측정하지 않았다. [측정 결과](../../artifacts/change-review-image-read.json).
 
 `read()`의 파일과 바이트 검증은 유지하고 source 생성은 미리보기 요청에만 한정하는 것이 먼저다. 별도 변환 헬퍼나 워커를 추가할 필요는 없다. 저장 대화상자 후 재검증은 대화와 캐시가 바뀌는 경계를 확인하므로 그대로 유지한다. 128MiB 내보내기를 한 번에 메모리에 모으는 부분은 이후 실제 큰 기록 측정으로 스트리밍 전환의 필요성을 판단한다.
 
 ### 진행 정보와 큐 DOM의 반복 작성
 
-[renderer.mjs:514](/Users/jhpark/code/my_budy/src/ui/renderer.mjs:514)는 답변 텍스트가 바뀔 때마다 진행 정보의 내용을 다시 만든다. `replaceChildren()` 뒤 `textContent`를 설정하므로 한 번의 제거는 중복이다. 계획과 도구 내용이 그대로여도 스트리밍에 따라 문자열을 다시 합친다. [renderer.mjs:527](/Users/jhpark/code/my_budy/src/ui/renderer.mjs:527)의 큐 목록도 모든 상태 갱신에서 재작성한다.
+[renderer.mjs:514](../../src/ui/renderer.mjs:514)는 답변 텍스트가 바뀔 때마다 진행 정보의 내용을 다시 만든다. `replaceChildren()` 뒤 `textContent`를 설정하므로 한 번의 제거는 중복이다. 계획과 도구 내용이 그대로여도 스트리밍에 따라 문자열을 다시 합친다. [renderer.mjs:527](../../src/ui/renderer.mjs:527)의 큐 목록도 모든 상태 갱신에서 재작성한다.
 
 현재 항목 수는 제한돼 있어 심각한 성능 저하를 확인한 것은 아니다. 기존 카드의 캐시 방식처럼 진행 정보와 큐의 값이 바뀔 때만 갱신하고, `textContent`만으로 내용을 교체하면 된다. 키보드 포커스가 잡힌 큐 버튼이 불필요하게 교체되는 것도 줄일 수 있다. 범용 렌더링 계층이나 별도 컴포넌트 프레임워크 도입은 필요하지 않다.
 
 ### 스킬 목록의 동기 읽기
 
-[main.cjs:660](/Users/jhpark/code/my_budy/src/main.cjs:660)는 최대 128개 스킬을 항목당 256KiB까지 메인 프로세스에서 동기로 읽고 해시한다. 상한은 있지만 목록 새로고침 한 번에 약 32MiB의 동기 파일 처리가 가능하다. 실행 직전 한 개 스킬 확인은 작고 명확한 검증 경계이므로 유지할 수 있다.
+[main.cjs:660](../../src/main.cjs:660)는 최대 128개 스킬을 항목당 256KiB까지 메인 프로세스에서 동기로 읽고 해시한다. 상한은 있지만 목록 새로고침 한 번에 약 32MiB의 동기 파일 처리가 가능하다. 실행 직전 한 개 스킬 확인은 작고 명확한 검증 경계이므로 유지할 수 있다.
 
 목록 새로고침은 기존 함수 안의 비동기 파일 읽기나 소규모 묶음 사이 yield를 우선 고려한다. 현재 실제 CLI 목록 76개가 있다는 기록만으로 CPU 지연이 크다고 단정하지 않는다. 오류 항목을 건너뛰는 정책과 연결 및 작업 폴더 재확인을 유지하고, 변경 이후 전체 소요 시간과 창 응답성을 측정한다.
 
@@ -108,21 +110,21 @@ P2는 특정 사용 흐름에서 동작이나 표시가 잘못되는 수정 대�
 
 변경 범위에서 TODO, FIXME, 완료된 작업을 남겨 둔 주석, 주석 처리된 실행 코드, lint 억제 지시를 찾지 못했다. 실제 주석은 턴 소유권, 늦은 프로세스 오류, 비활성 캐릭터 창, 삭제 응답 순서, 접수 확정 순서처럼 이유를 설명한다. OS 구석 동작의 미검증 주석은 실제 미검증 상태와 맞으므로 삭제 대상이 아니다.
 
-새로 추가한 [main.cjs:1203](/Users/jhpark/code/my_budy/src/main.cjs:1203)의 접수 순서 주석은 실행 큐와 저장 순서를 구분하므로 필요하다. 대기 편집의 저장 및 렌더러 세대 정리에는 왜 분기하는지 짧은 주석을 보완할 여지가 있다. 동작을 그대로 반복하는 줄별 주석은 늘리지 않는다.
+새로 추가한 [main.cjs:1203](../../src/main.cjs:1203)의 접수 순서 주석은 실행 큐와 저장 순서를 구분하므로 필요하다. 대기 편집의 저장 및 렌더러 세대 정리에는 왜 분기하는지 짧은 주석을 보완할 여지가 있다. 동작을 그대로 반복하는 줄별 주석은 늘리지 않는다.
 
 작은 처리들을 인위적인 헬퍼로 추출한 부분은 확인하지 못했다. 새 클래스 메서드는 기존 연결 책임 안의 버전 조회와 사용량 정제이며 별도 큐나 클립보드 프레임워크를 만들지 않았다. `Store`, 프로세스 연결, 이미지와 첨부 검증, 캐릭터 팩 경계는 책임과 검증이 다르므로 합칠 이유가 없다. 테스트의 기다림 함수는 여러 비동기 조건을 확인하는 용도다.
 
-다만 인라인 구현과 한 줄로 압축하는 것은 별개다. [main.cjs:937](/Users/jhpark/code/my_budy/src/main.cjs:937)의 파일 실패 정리, [main.cjs:700](/Users/jhpark/code/my_budy/src/main.cjs:700)의 편집 종료 처리, 스킬 읽기는 같은 함수 안에서 단계별 줄을 나눠야 검토하기 쉽다. [attachments.cjs:24](/Users/jhpark/code/my_budy/src/attachments.cjs:24)의 `try` 내부 들여쓰기도 정리 후보다.
+다만 인라인 구현과 한 줄로 압축하는 것은 별개다. [main.cjs:937](../../src/main.cjs:937)의 파일 실패 정리, [main.cjs:700](../../src/main.cjs:700)의 편집 종료 처리, 스킬 읽기는 같은 함수 안에서 단계별 줄을 나눠야 검토하기 쉽다. [attachments.cjs:24](../../src/attachments.cjs:24)의 `try` 내부 들여쓰기도 정리 후보다.
 
-CSS는 기존 팔레트와 작은 선택자 규칙을 사용한다. [style.css:47](/Users/jhpark/code/my_budy/src/ui/style.css:47)의 `.message-body` 글자 크기는 아래 기존 블록에 합칠 수 있다. 새 옵션의 전송키 동작은 반영됐지만 [renderer.mjs:347](/Users/jhpark/code/my_budy/src/ui/renderer.mjs:347)의 툴팁은 항상 Enter라고 안내하므로 선택값과 맞추는 작은 문구 수정이 필요하다.
+CSS는 기존 팔레트와 작은 선택자 규칙을 사용한다. [style.css:47](../../src/ui/style.css:47)의 `.message-body` 글자 크기는 아래 기존 블록에 합칠 수 있다. 새 옵션의 전송키 동작은 반영됐지만 [renderer.mjs:347](../../src/ui/renderer.mjs:347)의 툴팁은 항상 Enter라고 안내하므로 선택값과 맞추는 작은 문구 수정이 필요하다.
 
 모듈 수를 더 늘리거나 기존 검증 경계를 병합하는 작업보다 현재 함수 안의 상태 수명과 예외를 먼저 보완하는 편이 프로젝트 규칙에 맞는다. 파일 I/O를 비동기로 수행하는 이유가 있으므로 헬퍼를 줄인다는 이유로 동기 I/O를 늘리지 않는다.
 
 ## 문서의 정확성과 정리 대상
 
-[확장 결과](/Users/jhpark/code/my_budy/docs/BUDDY_EXPANSION_RESULT_2026-10-10.md:48)의 화면 복구 설명은 저장 중 편집과 렌더러 종료를 확인한 범위를 정상 reload까지 넓혀 표현하고 있다. 같은 문서의 보이는 답변 읽음 처리와 계정 변경 시 이전 사용량 제거 설명에도 R02와 R03의 예외가 있다. 이 세 문구는 해당 경로를 고친 뒤 회귀 결과와 함께 갱신해야 한다.
+[확장 결과](BUDDY_EXPANSION_RESULT_2026-10-10.md:48)의 화면 복구 설명은 저장 중 편집과 렌더러 종료를 확인한 범위를 정상 reload까지 넓혀 표현하고 있다. 같은 문서의 보이는 답변 읽음 처리와 계정 변경 시 이전 사용량 제거 설명에도 R02와 R03의 예외가 있다. 이 세 문구는 해당 경로를 고친 뒤 회귀 결과와 함께 갱신해야 한다.
 
-[TASKS 현재 구현 표](/Users/jhpark/code/my_budy/TASKS.md:17)의 설치 build29 보존 문구와 같은 파일의 최신 일반 실행 경로 CFBundleVersion 30 설명은 시점이 섞여 있다. 이전 결과 보고서의 역사적 숫자를 일괄 바꾸기보다 현재 표에서 과거 정리 작업 당시의 기록임을 명시하고 현재 값은 하나의 기준을 따른다.
+[TASKS 현재 구현 표](../../TASKS.md:17)의 설치 build29 보존 문구와 같은 파일의 최신 일반 실행 경로 CFBundleVersion 30 설명은 시점이 섞여 있다. 이전 결과 보고서의 역사적 숫자를 일괄 바꾸기보다 현재 표에서 과거 정리 작업 당시의 기록임을 명시하고 현재 값은 하나의 기준을 따른다.
 
 README와 TASKS는 기능 요약과 현재 상태를, 확장 결과 문서는 구체적인 동작과 증거를 맡고 있다. 역할이 달라 문서 전체를 통합하거나 삭제할 이유는 없다. 이전 보고서와 복구 자료는 현재 코드의 데드코드가 아니다. 최신 문서에서 중복된 긴 검증 목록은 결과 문서 링크로 줄일 수 있다.
 
@@ -144,11 +146,11 @@ README와 TASKS는 기능 요약과 현재 상태를, 확장 결과 문서는 �
 | 사용량과 도구 정보 | 계정 이벤트를 작업과 분리, 숫자 정제, 도구 항목 수 제한, 누적 토큰과 문맥 한도 구분 | R03과 R04, 종료 이후 늦은 토큰 이벤트 수용 정책 |
 | 진단과 패키지 | 대화와 인증 정보 및 원본 경로 제외, 런타임 제외 목록과 버전 metadata 유지 | 새 PC 설치, Windows 및 Intel, Developer ID와 공증 |
 
-이번 재실행에서 `npm run lint`, `npm run check`, `npm test`와 `git diff --check`는 통과했다. 단위 검사는 101개 통과, 실패와 건너뛰기 0개다. ESLint는 미정의 변수와 미사용 변수를 중심으로 검사하고 CSS 검사는 문법과 값 및 중복을 확인한다. 이는 상태 경합과 의미상 오류를 증명하지 않는다. [린트 로그](/Users/jhpark/code/my_budy/artifacts/change-review-lint.log), [정적 검사 로그](/Users/jhpark/code/my_budy/artifacts/change-review-check.log), [단위 검사 로그](/Users/jhpark/code/my_budy/artifacts/change-review-unit.log).
+이번 재실행에서 `npm run lint`, `npm run check`, `npm test`와 `git diff --check`는 통과했다. 단위 검사는 101개 통과, 실패와 건너뛰기 0개다. ESLint는 미정의 변수와 미사용 변수를 중심으로 검사하고 CSS 검사는 문법과 값 및 중복을 확인한다. 이는 상태 경합과 의미상 오류를 증명하지 않는다. [린트 로그](../../artifacts/change-review-lint.log), [정적 검사 로그](../../artifacts/change-review-check.log), [단위 검사 로그](../../artifacts/change-review-unit.log).
 
-기존 [Electron 통합 결과](/Users/jhpark/code/my_budy/artifacts/integration-smoke/integration.json)는 2026년 10월 10일 15시 12분 KST의 14종 통과 기록이며 현재 `src/` 전체 해시와 차이가 없다. 이번 검토에서는 통합 검사를 재실행하지 않았다. 이전 실제 모델 2회와 staging 알림 show 검증의 범위는 [확장 결과](/Users/jhpark/code/my_budy/docs/BUDDY_EXPANSION_RESULT_2026-10-10.md:76)를 따른다. 이번 경계 재현을 OS 실기나 모델 응답 검증으로 표현하지 않는다.
+기존 [Electron 통합 결과](../../artifacts/integration-smoke/integration.json)는 2026년 10월 10일 15시 12분 KST의 14종 통과 기록이며 현재 `src/` 전체 해시와 차이가 없다. 이번 검토에서는 통합 검사를 재실행하지 않았다. 이전 실제 모델 2회와 staging 알림 show 검증의 범위는 [확장 결과](BUDDY_EXPANSION_RESULT_2026-10-10.md:76)를 따른다. 이번 경계 재현을 OS 실기나 모델 응답 검증으로 표현하지 않는다.
 
-검사 스크립트 자체도 두 가지를 보완할 수 있다. 현재 expansion은 검증 후 워커와 CLI를 정리하고 `app.exit(0)`을 사용하므로 사용자 정상 종료를 검증하는 근거로 쓰면 안 된다. 실제 모델 검사 [real-buddy-modes-smoke.cjs:24](/Users/jhpark/code/my_budy/scripts/real-buddy-modes-smoke.cjs:24)는 검사 세션 삭제 실패를 로그에만 남기므로, 이후 실행에서는 응답 성공과 정리 성공을 결과 JSON에 따로 기록해야 한다. 이번 과거 실행의 정리 실패를 발견했다는 의미는 아니다.
+검사 스크립트 자체도 두 가지를 보완할 수 있다. 현재 expansion은 검증 후 워커와 CLI를 정리하고 `app.exit(0)`을 사용하므로 사용자 정상 종료를 검증하는 근거로 쓰면 안 된다. 실제 모델 검사 [real-buddy-modes-smoke.cjs:24](../../scripts/real-buddy-modes-smoke.cjs:24)는 검사 세션 삭제 실패를 로그에만 남기므로, 이후 실행에서는 응답 성공과 정리 성공을 결과 JSON에 따로 기록해야 한다. 이번 과거 실행의 정리 실패를 발견했다는 의미는 아니다.
 
 ## 권장 작업 순서와 수용 기준
 

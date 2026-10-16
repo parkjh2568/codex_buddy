@@ -30,6 +30,16 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
     if(thread)send({id,result:{thread,model:params.model??'test-main'}});
     else send({id,error:{code:-32000,message:'Thread missing'}});
   }
+  if(method==='thread/turns/list'){
+    const thread=threads.get(params.threadId),offset=params.cursor?Number(params.cursor.slice('page:'.length)):0;
+    if(!thread)send({id,error:{code:-32000,message:'Thread missing'}});
+    else{const ordered=params.sortDirection==='desc'?[...thread.turns].reverse():thread.turns,data=ordered.slice(offset,offset+params.limit).map(turn=>({...turn,itemsView:'full'}));send({id,result:{data,nextCursor:offset+data.length<ordered.length?'page:'+(offset+data.length):null}});}
+  }
+  if(method==='test/add-history-turns'){
+    const thread=threads.get(params.threadId);
+    if(!thread||!Number.isInteger(params.count)||params.count<1||params.count>80)send({id,error:{code:-32602,message:'Invalid synthetic history count'}});
+    else{for(let i=0;i<params.count;i++)thread.turns.push({id:'synthetic-history-'+i,status:'completed',startedAt:Date.now()+i,items:[{type:'userMessage',id:'synthetic-user-'+i,content:[{type:'text',text:'synthetic question '+i}]},{type:'agentMessage',id:'synthetic-reply-'+i,text:'synthetic answer '+i}]});send({id,result:{turns:thread.turns.length}});}
+  }
   if(method==='turn/start'||method==='review/start'){
     const review=method==='review/start',input=review?[{type:'text',text:'INTERNAL_REVIEW_WRAPPER: '+params.target.instructions}]:params.input;
     const turnId='model-turn-'+(++sequence);
@@ -49,5 +59,5 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
     };if(hold)finishCurrent=finish;else timer=setTimeout(finish,900);
   }
   if(method==='turn/interrupt'){clearTimeout(timer);clearTimeout(deltaTimer);const turn=threads.get(params.threadId)?.turns.find(t=>t.id===params.turnId);if(turn)turn.status='interrupted';send({id,result:{}});send({method:'turn/completed',params:{threadId:params.threadId,turn:{id:params.turnId,status:'interrupted'}}});}
-  if(id!==undefined&&!['account/read','initialize','collaborationMode/list','test/set-skill','test/emit','skills/list','account/rateLimits/read','model/list','config/read','test/hold','test/complete-current','thread/start','thread/resume','thread/read','turn/start','review/start','turn/interrupt'].includes(method))send({id,error:{code:-32601,message:'Method unavailable'}});
+  if(id!==undefined&&!['account/read','initialize','collaborationMode/list','test/set-skill','test/emit','test/add-history-turns','skills/list','account/rateLimits/read','model/list','config/read','test/hold','test/complete-current','thread/start','thread/resume','thread/read','thread/turns/list','turn/start','review/start','turn/interrupt'].includes(method))send({id,error:{code:-32601,message:'Method unavailable'}});
 });

@@ -9,7 +9,7 @@ function loadPack(directory) {
   if (fs.lstatSync(manifestPath).isSymbolicLink() || !fs.statSync(manifestPath).isFile() || fs.statSync(manifestPath).size > 65536) throw new Error('캐릭터 설명 파일의 경로·크기를 확인해주세요.');
   const manifestBytes=fs.readFileSync(manifestPath);if(manifestBytes.length>65536)throw Error('캐릭터 설명 파일 크기를 확인해주세요.');
   const manifest = JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(manifestBytes));
-  if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest) || ![1,2].includes(manifest.schemaVersion) || !/^[a-z][a-z0-9-]{0,47}$/.test(manifest.id)) throw new Error('지원하지 않는 캐릭터 팩 형식입니다.');
+  if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest) || ![1,2].includes(manifest.schemaVersion) || typeof manifest.id !== 'string' || !/^[a-z][a-z0-9-]{0,47}$/.test(manifest.id)) throw new Error('지원하지 않는 캐릭터 팩 형식입니다.');
   if (typeof manifest.name !== 'string' || !manifest.name.trim() || Array.from(manifest.name.trim().normalize('NFC')).length > 60) throw new Error('캐릭터 이름을 확인해주세요.');
   if (!manifest.states || typeof manifest.states !== 'object' || Array.isArray(manifest.states) || typeof manifest.states.idle !== 'string') throw new Error('기본 자세(idle)가 필요합니다.');
   const size = manifest.size ?? { width: 150, height: 180 };
@@ -34,7 +34,7 @@ function loadPack(directory) {
     const entries = [{id:'base',name:'기본 성격',file:config.base}, ...config.modes], seen = new Set();
     personas = [];
     for (const entry of entries) {
-      if (!entry || !/^[a-z][a-z0-9-]{0,47}$/.test(entry.id) || seen.has(entry.id) || typeof entry.name !== 'string' || !entry.name.trim() || Array.from(entry.name.trim().normalize('NFC')).length > 60 || /[\u0000-\u001f\u007f-\u009f]/u.test(entry.name) || typeof entry.file !== 'string' || path.isAbsolute(entry.file) || path.extname(entry.file) !== '.md') throw Error('페르소나 파일 구성이 올바르지 않습니다.');
+      if (!entry || typeof entry.id !== 'string' || !/^[a-z][a-z0-9-]{0,47}$/.test(entry.id) || seen.has(entry.id) || typeof entry.name !== 'string' || !entry.name.trim() || Array.from(entry.name.trim().normalize('NFC')).length > 60 || /[\u0000-\u001f\u007f-\u009f]/u.test(entry.name) || typeof entry.file !== 'string' || path.isAbsolute(entry.file) || path.extname(entry.file) !== '.md') throw Error('페르소나 파일 구성이 올바르지 않습니다.');
       const file = fs.realpathSync(path.resolve(root, entry.file));
       if (!file.startsWith(root + path.sep) || !fs.statSync(file).isFile() || fs.statSync(file).size > 16384) throw Error('페르소나는 팩 내부의 16KiB 이하 MD 파일이어야 합니다.');
       const relative = path.relative(root,file).split(path.sep).join('/'), bytes = fs.readFileSync(file), text = new TextDecoder('utf-8',{fatal:true}).decode(bytes);

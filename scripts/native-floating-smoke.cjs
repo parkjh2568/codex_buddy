@@ -1,7 +1,10 @@
 const fs = require('node:fs');
 const path = require('node:path');
 module.exports = async ({app,pet,panel,screen,getDrag}) => {
+  let artifactRoot;
   try {
+    artifactRoot=path.resolve(process.env.ONGGI_SMOKE_ROOT??path.join(__dirname,'..','artifacts'));fs.mkdirSync(artifactRoot,{recursive:true});
+    fs.writeFileSync(path.join(artifactRoot,'native-floating-smoke.json'),JSON.stringify({verifiedAt:new Date().toISOString(),status:'running'},null,2));
     await new Promise(resolve=>setTimeout(resolve,3500));
     await pet.webContents.executeJavaScript(`window.onggi.action('settings',{reducedMotion:true})`);
     panel.hide();pet.setPosition(450,250);pet.webContents.send('pet-layout-changed');
@@ -18,14 +21,16 @@ module.exports = async ({app,pet,panel,screen,getDrag}) => {
     console.log('NATIVE_FLOATING_READY',JSON.stringify({bounds:pet.getBounds(),display}));
     const deadline=Date.now()+240000;
     const timer=setInterval(async()=>{
-      if(left&&right&&panel.isVisible()){
-        clearInterval(timer);
-        if(focused||maxSize.width>expected.width||maxSize.height>expected.height){console.error('Native focus or size regression',JSON.stringify({focused,maxSize}));app.exit(1);return;}
-        const result={verifiedAt:new Date().toISOString(),status:'passed',platform:process.platform,nativePointer:true,left,right,focused,maxSize,panelOpened:true,tilingPreviewVerified:false,windowsNativeVerified:process.platform==='win32'};
-        fs.writeFileSync(path.join(__dirname,'..','artifacts','native-floating-smoke.json'),JSON.stringify(result,null,2));
-        fs.writeFileSync(path.join(__dirname,'..','artifacts','floating-panel.png'),(await panel.webContents.capturePage()).toPNG());
-        console.log('NATIVE_FLOATING_OK',JSON.stringify(result));app.quit();
-      }else if(Date.now()>deadline){clearInterval(timer);console.error('Native floating review timeout',JSON.stringify({left,right,focused,maxSize}));app.exit(1);}
+      try{
+        if(left&&right&&panel.isVisible()){
+          clearInterval(timer);
+          if(focused||maxSize.width>expected.width||maxSize.height>expected.height){throw Error('Native focus or size regression '+JSON.stringify({focused,maxSize}));}
+          const result={verifiedAt:new Date().toISOString(),status:'passed',platform:process.platform,nativePointer:true,left,right,focused,maxSize,panelOpened:true,tilingPreviewVerified:false,windowsNativeVerified:process.platform==='win32'};
+          fs.writeFileSync(path.join(artifactRoot,'floating-panel.png'),(await panel.webContents.capturePage()).toPNG());
+          fs.writeFileSync(path.join(artifactRoot,'native-floating-smoke.json'),JSON.stringify(result,null,2));
+          console.log('NATIVE_FLOATING_OK',JSON.stringify(result));app.quit();
+        }else if(Date.now()>deadline){clearInterval(timer);throw Error('Native floating review timeout '+JSON.stringify({left,right,focused,maxSize}));}
+      }catch(error){clearInterval(timer);try{fs.writeFileSync(path.join(artifactRoot,'native-floating-smoke.json'),JSON.stringify({verifiedAt:new Date().toISOString(),status:'failed',error:error.message},null,2));}catch{}console.error(error.stack);app.exit(1);}
     },250);
-  }catch(error){console.error(error.stack);app.exit(1);}
+  }catch(error){if(artifactRoot){try{fs.writeFileSync(path.join(artifactRoot,'native-floating-smoke.json'),JSON.stringify({verifiedAt:new Date().toISOString(),status:'failed',error:error.message},null,2));}catch{}}console.error(error.stack);app.exit(1);}
 };

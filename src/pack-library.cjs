@@ -12,10 +12,10 @@ class PackLibrary{
     if(store.writeBlocked)throw Error('대화 저장을 복구한 뒤 캐릭터 변경을 복구해주세요.');
     if(fs.lstatSync(this.journal).isSymbolicLink()||!fs.statSync(this.journal).isFile()||fs.statSync(this.journal).size>131072)throw Error('캐릭터 복구 파일을 확인해주세요.');
     const pending=JSON.parse(fs.readFileSync(this.journal,'utf8'));
-    if(pending.version!==1||!['prepared','committed'].includes(pending.phase)||!['install','replace','remove'].includes(pending.operation)||!/^[a-z][a-z0-9-]{0,47}$/.test(pending.id)||!/^\.stage-[a-f0-9-]{36}$/.test(pending.stage)||!/^\.archive-[a-f0-9-]{36}$/.test(pending.backup)||!pending.before||!/^([a-z][a-z0-9-]{0,47})$/.test(pending.before.characterId)||!pending.before.personaModes||typeof pending.before.personaModes!=='object'||Array.isArray(pending.before.personaModes)||!Array.isArray(pending.createdPersonas)||pending.createdPersonas.length>9)throw Error('캐릭터 복구 범위를 확인해주세요.');
+    if(!pending||pending.version!==1||!['prepared','committed'].includes(pending.phase)||!['install','replace','remove'].includes(pending.operation)||typeof pending.id!=='string'||!/^[a-z][a-z0-9-]{0,47}$/.test(pending.id)||typeof pending.stage!=='string'||!/^\.stage-[a-f0-9-]{36}$/.test(pending.stage)||typeof pending.backup!=='string'||!/^\.archive-[a-f0-9-]{36}$/.test(pending.backup)||!pending.before||typeof pending.before.characterId!=='string'||!/^[a-z][a-z0-9-]{0,47}$/.test(pending.before.characterId)||!pending.before.personaModes||typeof pending.before.personaModes!=='object'||Array.isArray(pending.before.personaModes)||!Array.isArray(pending.createdPersonas)||pending.createdPersonas.length>9)throw Error('캐릭터 복구 범위를 확인해주세요.');
     for(const [id,mode]of Object.entries(pending.before.personaModes))if(!/^[a-z][a-z0-9-]{0,47}$/.test(id)||typeof mode!=='string'||!/^[a-z][a-z0-9-]{0,47}$/.test(mode))throw Error('캐릭터 이전 설정을 확인해주세요.');
-    if(typeof pending.personaDirectoryCreated!=='boolean'||pending.oldRevision!==null&&!/^[a-f0-9]{64}$/.test(pending.oldRevision)||pending.newRevision!==null&&!/^[a-f0-9]{64}$/.test(pending.newRevision)||pending.operation==='install'&&pending.oldRevision!==null||pending.operation==='remove'&&pending.newRevision!==null)throw Error('캐릭터 복구 버전을 확인해주세요.');
-    const personaIds=new Set();for(const entry of pending.createdPersonas){if(!entry||!/^[a-z][a-z0-9-]{0,47}$/.test(entry.id)||!/^[a-f0-9]{64}$/.test(entry.hash)||personaIds.has(entry.id))throw Error('말투 복구 파일 범위를 확인해주세요.');personaIds.add(entry.id);}
+    if(typeof pending.personaDirectoryCreated!=='boolean'||pending.oldRevision!==null&&(typeof pending.oldRevision!=='string'||!/^[a-f0-9]{64}$/.test(pending.oldRevision))||pending.newRevision!==null&&(typeof pending.newRevision!=='string'||!/^[a-f0-9]{64}$/.test(pending.newRevision))||pending.operation==='install'&&pending.oldRevision!==null||pending.operation==='remove'&&pending.newRevision!==null)throw Error('캐릭터 복구 버전을 확인해주세요.');
+    const personaIds=new Set();for(const entry of pending.createdPersonas){if(!entry||typeof entry.id!=='string'||!/^[a-z][a-z0-9-]{0,47}$/.test(entry.id)||typeof entry.hash!=='string'||!/^[a-f0-9]{64}$/.test(entry.hash)||personaIds.has(entry.id))throw Error('말투 복구 파일 범위를 확인해주세요.');personaIds.add(entry.id);}
     const target=path.join(this.root,pending.id),stage=path.join(this.directory,pending.stage),backup=path.join(this.directory,pending.backup);
     for(const directory of [target,stage,backup])if(fs.existsSync(directory)&&(fs.lstatSync(directory).isSymbolicLink()||fs.realpathSync(directory)!==directory))throw Error('캐릭터 복구 폴더를 확인해주세요.');
     if(pending.phase==='committed'){
@@ -42,7 +42,6 @@ class PackLibrary{
     const personaDirectory=path.join(this.directory,'personas',pending.id);
     if(fs.existsSync(personaDirectory)&&fs.realpathSync(personaDirectory)!==personaDirectory)throw Error('말투 복구 폴더를 확인해주세요.');
     for(const entry of pending.createdPersonas){
-      if(!entry||!/^[a-z][a-z0-9-]{0,47}$/.test(entry.id)||!/^[a-f0-9]{64}$/.test(entry.hash))throw Error('말투 복구 파일 범위를 확인해주세요.');
       const file=path.join(personaDirectory,entry.id+'.md');
       if(fs.existsSync(file)){if(fs.lstatSync(file).isSymbolicLink()||!fs.statSync(file).isFile()||fs.statSync(file).size>16384||createHash('sha256').update(fs.readFileSync(file)).digest('hex')!==entry.hash)throw Error('수정한 말투를 보존했습니다.');fs.unlinkSync(file);}
     }
@@ -52,7 +51,7 @@ class PackLibrary{
   }
   change(pack,operation,store,commit){
     if(fs.existsSync(this.journal))throw Error('캐릭터 변경 복구가 먼저 필요합니다.');
-    if(!['install','replace','remove'].includes(operation)||!/^[a-z][a-z0-9-]{0,47}$/.test(pack.manifest.id))throw Error('캐릭터 변경을 확인해주세요.');
+    if(!['install','replace','remove'].includes(operation)||typeof pack.manifest.id!=='string'||!/^[a-z][a-z0-9-]{0,47}$/.test(pack.manifest.id))throw Error('캐릭터 변경을 확인해주세요.');
     const id=pack.manifest.id,target=path.join(this.root,id),stageName='.stage-'+randomUUID(),backupName='.archive-'+randomUUID(),stage=path.join(this.directory,stageName),backup=path.join(this.directory,backupName);
     if(fs.existsSync(target)&&(fs.lstatSync(target).isSymbolicLink()||fs.realpathSync(target)!==target))throw Error('설치된 팩 폴더를 확인해주세요.');
     const existing=fs.existsSync(target)?loadPack(target):null;
@@ -89,15 +88,38 @@ class PackLibrary{
     return entries.sort((a,b)=>b.at-a.at);
   }
   export(pack,directory,personas){
+    if(typeof pack.manifest.id!=='string'||!/^[a-z][a-z0-9-]{0,47}$/.test(pack.manifest.id))throw Error('캐릭터 ID를 확인해주세요.');
     const parent=fs.realpathSync(directory),destination=path.join(parent,pack.manifest.id+'-'+randomUUID());fs.mkdirSync(destination);
+    const directories=[{file:destination,stat:fs.lstatSync(destination)}],written=[];
     try{
       const manifest=structuredClone(pack.manifest),contents=new Map(pack.contents);
       if(personas&&manifest.personas){for(const entry of personas.custom.get(pack.manifest.id)??[]){if(entry.archived){manifest.personas.modes=manifest.personas.modes.filter(mode=>mode.id!==entry.id);continue;}const file='personas/'+entry.id+'.md';manifest.personas.modes=manifest.personas.modes.filter(mode=>mode.id!==entry.id);manifest.personas.modes.push({id:entry.id,name:entry.name,description:entry.description,file});contents.set(file,Buffer.from(personas.read(pack.manifest.id,entry.id).text));}}
-      fs.writeFileSync(path.join(destination,'manifest.json'),JSON.stringify(manifest,null,2),{flag:'wx',mode:0o600});
+      const output=new Map([['manifest.json',Buffer.from(JSON.stringify(manifest,null,2))]]);
       const referenced=new Set([...Object.values(manifest.states),...(manifest.animation?.blink.frames??[]).map(e=>e.file),...(manifest.personas?[manifest.personas.base,...manifest.personas.modes.map(e=>e.file)]:[])]);
-      for(const [relative,original]of contents){if(!referenced.has(relative))continue;const file=path.resolve(destination,relative);if(!file.startsWith(destination+path.sep))throw Error('내보내기 경로를 확인해주세요.');fs.mkdirSync(path.dirname(file),{recursive:true});const persona=pack.personas?.find(e=>e.file===relative);const bytes=persona&&personas?Buffer.from(personas.read(pack.manifest.id,persona.id).text):original;fs.writeFileSync(file,bytes,{flag:'wx',mode:0o600});}
+      for(const [relative,original]of contents){if(!referenced.has(relative))continue;const file=path.resolve(destination,relative);if(!file.startsWith(destination+path.sep))throw Error('내보내기 경로를 확인해주세요.');const persona=pack.personas?.find(e=>e.file===relative);const bytes=persona&&personas?Buffer.from(personas.read(pack.manifest.id,persona.id).text):original;output.set(relative,bytes);}
+      for(const [relative,bytes]of output){
+        const file=path.resolve(destination,relative);
+        if(fs.realpathSync(destination)!==destination)throw Error('내보내기 폴더가 변경됐어요.');
+        let folder=destination;
+        for(const part of path.relative(destination,path.dirname(file)).split(path.sep).filter(Boolean)){
+          folder=path.join(folder,part);
+          try{fs.mkdirSync(folder);directories.push({file:folder,stat:fs.lstatSync(folder)});}catch(error){if(error.code!=='EEXIST')throw error;}
+          if(fs.lstatSync(folder).isSymbolicLink()||!fs.statSync(folder).isDirectory()||fs.realpathSync(folder)!==folder)throw Error('내보내기 경로를 확인해주세요.');
+        }
+        const descriptor=fs.openSync(file,'wx',0o600);
+        try{written.push({file,stat:fs.fstatSync(descriptor),bytes});fs.writeFileSync(descriptor,bytes);}finally{fs.closeSync(descriptor);}
+      }
       loadPack(destination);return destination;
-    }catch(error){fs.rmSync(destination,{recursive:true,force:true});throw error;}
+    }catch(error){
+      for(const entry of written.reverse()){
+        try{const stat=fs.lstatSync(entry.file);if(stat.isFile()&&!stat.isSymbolicLink()&&stat.dev===entry.stat.dev&&stat.ino===entry.stat.ino&&stat.size===entry.bytes.length&&fs.realpathSync(entry.file)===entry.file&&fs.readFileSync(entry.file).equals(entry.bytes))fs.unlinkSync(entry.file);}catch{}
+      }
+      for(const entry of directories.reverse()){
+        try{const stat=fs.lstatSync(entry.file);if(stat.isDirectory()&&!stat.isSymbolicLink()&&stat.dev===entry.stat.dev&&stat.ino===entry.stat.ino&&fs.realpathSync(entry.file)===entry.file)fs.rmdirSync(entry.file);}catch{}
+      }
+      if(fs.existsSync(destination))throw Error(error.message+' 일부 내보내기 파일을 보존했어요: '+destination);
+      throw error;
+    }
   }
 }
 module.exports={PackLibrary};

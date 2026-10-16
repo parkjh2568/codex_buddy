@@ -1,6 +1,6 @@
 # macOS·Windows 빌드 가이드
 
-기준: 2026-10-10, 프로젝트 `0.1.0-alpha.16`. 기존 일반 실행 경로의 확인값은 alpha.14/CFBundleVersion 30, 최신 검증용 staging은 build32다. [변경 이슈 수정 결과](CHANGE_REMEDIATION_RESULT_2026-10-10.md)와 [첨부·대기열 전달 기록](ATTACHMENTS_AND_QUEUE_2026-10-10.md)에서 적용/검증 시점을 구분한다. 이전 staging build31은 `dist/rollback-alpha15-build31/`에 보존한다.
+기준: 2026-10-16, 프로젝트 `0.1.0-alpha.22`. 현재 검증용 staging은 build38이며 기존 일반 실행 경로 alpha14/build30은 교체하지 않았다. [Mac 후속 결과](MAC_FOLLOWUP_RESULT_2026-10-15.md)에서 최신 소스·검사·전후 측정·패키지를 구분한다. 직전 build37 전체 앱은 `artifacts/mac-followup-2026-10-15/baseline-app37.app`에 보존했고 더 이전 복구 자료는 기존 위치를 유지한다.
 
 이 가이드는 현재 `package.json`과 `scripts/package.cjs`가 제공하는 명령을 기준으로 한다. macOS Apple Silicon 앱 생성·실행은 검증했다. Windows와 Intel Mac/Windows ARM64는 아래 코드 기반 절차를 실제 대상 환경에서 검증해야 한다. 빌드 결과물은 앱 실행 묶음이다. macOS에는 로컬 ad-hoc 서명을 적용하며 Developer ID/공증을 갖춘 외부 배포본이나 설치 프로그램은 아니다.
 
@@ -171,17 +171,18 @@ Compress-Archive -Path '.\dist\OnggiBot-win32-x64\*' -DestinationPath '.\dist\On
 
 | 명령 | 역할 | 실제 모델 호출 | 참고 |
 |---|---|---|---|
-| `npm run smoke:integration` | 13종 UI 검사, 이름을 인수로 주면 선택 실행 | 없음 | 격리 프로필·실패 시 비정상 종료 |
+| `npm run smoke:integration` | 14종 UI 검사, 이름을 인수로 주면 선택 실행 | 없음 | 성공 JSON·exit·프로필 정리 각각 확인 |
 | `npm run verify:package` | staging ASAR·worker·아이콘·큰 이미지·첨부 사본 | 없음 | `--archive <app.asar>` / `--installed`, 개인 자료는 선택형 `--image-items` |
 | `npm run smoke:packaged-resources` | 배포 ASAR 움직임/줄이기/숨김 CPU | 없음 | 경로 인수·ONGGI_SMOKE_ROOT·ONGGI_RESOURCE_PHASE_MS, 기본 30분 |
 | `npm run codex:attachments` | 실제 이미지 색상/파일 표식 읽기 | 있음 | synthetic 입력·ephemeral Luna/high, ONGGI_CODEX_PATH 지원 |
 | `npm run check` | JS 구문·기본 팩 확인 | 없음 | 빌드 전 기본 확인 |
 | `npm run lint` | JS 미정의/미사용·CSS 문법/값/중복 속성 | 없음 | 빌드 전 정적 검사 |
+| `npm run smoke:chat-ui` | `+` 메뉴·답변/이미지 심플 표시·실제 30초 전체 숨김·보호 유예·4모서리 IPC | 없음 | 격리 fixture, native 좌표 0인 Chromium 입력의 실제 geometry는 별도 CUA 검증 |
 | `npm run smoke:attachments` | 이미지/파일 첨부·미니 FIFO·사본 보존·기록 복원 | 없음 | 테스트 CLI/선택창 대역, 실제 모델 검증은 별도 수행 |
 | `npm run smoke:connection-images` | 테스트 CLI 로그인·재연결·이미지 표시/저장 | 없음 | 격리 프로필, 실제 브라우저 인증은 미검증 |
 | `npm run smoke:stability` | 숨김/미니/긴 원문/renderer 종료 복구·스킨 포커스 | 없음 | 격리 체험 프로필, macOS 검증 |
 | `npm run smoke:resources` | 움직임·움직임 줄이기·숨김 각 10분 프로세스 CPU | 없음 | 총 30분, 배터리/전후 비교 검증 아님 |
-| `npm test` | 저장·팩·프로토콜 등 핵심 검증 | 없음 | macOS 90개 통과, Windows 실기/심볼릭 링크 호환 미검증 |
+| `npm test` | 저장·팩·프로토콜 등 핵심 검증 | 없음 | 최신 소스 macOS 190개 통과(2026-10-16 Mac 후속), Windows 실기/심볼릭 링크 호환 미검증 |
 | `npm run build` | UI 번들·라이선스 고지 생성 | 없음 | 컴파일 단계, 앱 패키지 생성은 별도 |
 | `npm run smoke` | 격리 프로필의 체험 UI·큐 검증 | 없음 | 실제 데스크톱 세션 필요 |
 | `npm run smoke:buddy` | 테스트 CLI의 스킨·미니·페르소나·MD 편집 검증 | 없음 | macOS 검증, Windows 미검증 |
@@ -224,12 +225,14 @@ macOS용은 Mac에서, Windows용은 Windows에서 대상 아키텍처 Node로 �
 
 | 위치 | 현재 값/역할 |
 |---|---|
-| package.json / package-lock.json | 프로젝트 `0.1.0-alpha.16` |
+| package.json / package-lock.json | 프로젝트 `0.1.0-alpha.20` |
 | scripts/package.cjs의 appVersion | 배포 앱 버전 `0.1.0`; 패키지 안의 package.json 버전도 이 값으로 변경됨 |
-| scripts/package.cjs의 buildVersion | 예외 수정 검증용 staging `32`; 기존 일반 실행 경로의 확인값은 `30` |
-| CLI clientInfo | 소스 version과 패키징 시 보존한 onggiProjectVersion 사용: 양쪽 alpha.16 |
+| scripts/package.cjs의 buildVersion | 후속 검증용 staging `38`; 기존 일반 실행 경로의 확인값은 `30` |
+| CLI clientInfo | 소스 version과 패키징 시 보존한 onggiProjectVersion 사용: 양쪽 alpha.20 |
 
 프로젝트 version만 변경해도 현재 패키징 버전이 자동으로 따라가는 구조는 아니다. 배포 시 프로젝트·빌드 버전을 함께 확인한다.
+
+alpha20/build36의 검증·복구 사본은 [최종 후속 결과](history/FINAL_IMPLEMENTATION_RESULT_2026-10-13.md)를 따른다. `ONGGI_PERFORMANCE_DETAIL=1 npm run smoke:performance`는 1/8/16/24/30MiB 저장/읽기·본문 검색과 100/1,000/10,000개 메시지를 계측한다. `ONGGI_TIMING_PERFORMANCE_DETAIL=1 npm run smoke:timing`은 0/1/16/30MiB의 모의 CLI 중단과 해당 렌더러 CPU 프로파일을 수집한다. 두 명령은 실제 모델을 호출하지 않으며 `ONGGI_SMOKE_ROOT`를 실행별 절대 경로로 지정한다.
 
 ## 6. 빌드 후 실제 Codex 연결
 
@@ -260,4 +263,20 @@ Windows의 네이티브 CLI와 WSL CLI는 다른 실행 환경이다. CLI 재탐
 
 ## 검증 산출물과 이력
 
-재사용 검사는 `scripts/`에 둔다. 임시 프로필/로그는 `artifacts/`에 기록하며 사용자 원본/복구 백업은 확인 없이 지우지 않는다. build26 전달과 당시 실기 범위는 [과거 빌드 기록](history/BUILD_NOTES_2026-10-08.md)에 보존했다. 현재 소스/staging 검증과 기존 설치본 보존은 [확장 결과](BUDDY_EXPANSION_RESULT_2026-10-10.md)를 따른다. build30 정리 당시의 기록은 [정리 결과](CLEANUP_RESULT_2026-10-10.md)에 유지한다.
+버전별 소스/ASAR 차이·검사 수·서명·복구 사본은 [검토 이력](history/README.md)에 보존한다. 현재 실행 명령과 과거 후보의 검증을 구분한다.
+
+재사용 검사는 `scripts/`에 둔다. 임시 프로필/로그는 `artifacts/`에 기록하며 사용자 원본/복구 백업은 확인 없이 지우지 않는다. build26 전달과 당시 실기 범위는 [과거 빌드 기록](history/BUILD_NOTES_2026-10-08.md)에 보존했다. 현재 소스/staging 검증과 기존 설치본 보존은 [Mac 후속 결과](MAC_FOLLOWUP_RESULT_2026-10-15.md)를 따른다. build30 정리 당시의 기록은 [정리 결과](history/CLEANUP_RESULT_2026-10-10.md)에 유지한다.
+
+## 검사 결과와 복구 자료
+
+통합 실행은 `ONGGI_SMOKE_ROOT`를 지정하면 그 위치, 지정하지 않으면 `artifacts/integration-smoke/run-*`의 새 폴더에 결과를 저장한다. 각 사례의 프로필과 JSON/PNG도 해당 실행 안에 둔다. 성공한 프로필은 결과 보존 후 정리하며 실패한 프로필은 남긴다. 결과 JSON은 `sourceHashes`, `scriptHashes`, `fixtureHashes`를 기록한다.
+
+선택형 기록 계측은 `ONGGI_HISTORY_COST_REVIEW=1`과 `ONGGI_SMOKE_ROOT`로 새 결과 폴더를 지정할 수 있다. 기본 출력은 `artifacts/history-cost`다. `ONGGI_HISTORY_COST_LABEL`은 영문/숫자/하이픈 1~64자다. 이전 날짜별 결과 폴더가 미리 있을 필요는 없다.
+
+플로팅 재시작 검사는 같은 `ONGGI_SMOKE_ROOT`로 `--floating-smoke`, 이어 `--floating-smoke --verify-floating-restore`, 마지막으로 `--floating-smoke --verify-floating-recovery`를 실행한다. 같은 프로필의 첫 검사 결과와 복원 완료를 확인하며 공용 이전 JSON을 대신 읽지 않는다. 세 단계의 프로필은 마지막 결과를 보존한 뒤 정리한다.
+
+과거 앱·캐시·일회성 검사 원본의 [복구 압축본](../artifacts/legacy-cleanup-2026-10-12/cleanup-targets.tar.gz)과 [원래 경로/파일/링크/해시](../artifacts/legacy-cleanup-2026-10-12/removal-manifest.json)를 함께 사용한다. 새 빈 폴더에서 필요한 항목을 복원·대조하고 현재 작업 파일을 일괄 덮어쓰지 않는다. 실행·검증 범위는 [정리 결과](history/LEGACY_FILE_CLEANUP_RESULT_2026-10-12.md)를 따른다.
+
+alpha22의 추가 계측은 `artifacts/mac-followup-2026-10-15/`에 원자료·스크립트·실패 로그와 함께 보존한다. Store/첨부/원격 Node 벤치는 각각 `store-benchmark/benchmark.cjs`, `attachment-benchmark/benchmark.cjs --run`, `remote-benchmark/paging-benchmark.cjs`로 재현한다. 실제 이미지 검증은 `image-benchmark/image-cost-benchmark.cjs`를 Node로 실행하면 격리 Electron 자식을 순차 실행한다. 다른 대량 시험과 겹치지 않게 실행한다.
+
+자원 스크립트는 표본별 전원 출처와 유휴 상태, 실제 발생한 잠금·절전·AC 이벤트를 함께 기록한다. `ONGGI_RESOURCE_BUDDY_PROFILES=1`은 정숙·일상 상태를 추가한다. 이벤트를 관찰했다고 그 전환의 정상 복귀를 검증한 것은 아니다. `ONGGI_NATIVE_CLIPBOARD_REVIEW=1` 확장 검사는 현재 OS 클립보드를 읽고 임시 변경 후 복원하므로 구체적 사용자 승인 아래에서만 실행한다. 복원 확인은 OS write 완료이며 원본 payload 재읽기 대조는 포함하지 않는다.

@@ -28,8 +28,16 @@ class Store {
     catch(error) { this.writeBlocked=true;this.warning=`저장 복구가 필요합니다. 원본을 보존했습니다: ${error.message}`; }
     try {
       if (fs.existsSync(this.file)) {
-        if (fs.statSync(this.file).size > 8 * 1024 * 1024) throw new Error('저장 파일 크기를 확인해주세요.');
-        const saved = JSON.parse(fs.readFileSync(this.file, 'utf8'));
+        if(fs.realpathSync(this.directory)!==this.directory)throw Error('저장 폴더 경로가 바뀌었습니다.');
+        const descriptor=fs.openSync(this.file,fs.constants.O_RDONLY|(fs.constants.O_NOFOLLOW??0));let saved;
+        try{
+          const stat=fs.fstatSync(descriptor);if(!stat.isFile()||stat.size>8*1024*1024)throw Error('저장 파일 크기·경로를 확인해주세요.');
+          const bytes=Buffer.alloc(stat.size+1);let count=0;
+          while(count<bytes.length){const read=fs.readSync(descriptor,bytes,count,bytes.length-count,null);if(!read)break;count+=read;}
+          const after=fs.fstatSync(descriptor),named=fs.lstatSync(this.file);
+          if(count!==stat.size||!named.isFile()||['dev','ino','size','mtimeMs','ctimeMs'].some(key=>after[key]!==stat[key]||named[key]!==stat[key])||fs.realpathSync(this.directory)!==this.directory)throw Error('저장 파일이 읽는 중 변경됐어요. 원본을 확인해주세요.');
+          saved=JSON.parse(new TextDecoder('utf-8',{fatal:true,ignoreBOM:true}).decode(bytes.subarray(0,count)));
+        }finally{fs.closeSync(descriptor);}
         if (![1,2].includes(saved.version)) throw new Error('저장 형식이 올바르지 않습니다.');
         if (!saved.settings || typeof saved.settings !== 'object' || Array.isArray(saved.settings)) throw new Error('저장 설정 형식이 올바르지 않습니다.');
         const settings = { ...defaults };
@@ -97,11 +105,18 @@ class Store {
   }
   readHistory(id) {
     if(fs.realpathSync(this.historyDirectory)!==this.historyDirectory)throw Error('대화 폴더 경로가 바뀌었습니다.');
-    if (!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(id)) throw new Error('대화 ID 형식이 올바르지 않습니다.');
+    if (typeof id !== 'string' || !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(id)) throw new Error('대화 ID 형식이 올바르지 않습니다.');
     const file = path.join(this.historyDirectory, id + '.json');
     if (fs.lstatSync(file).isSymbolicLink() || !fs.statSync(file).isFile() || fs.statSync(file).size > 32 * 1024 * 1024) throw new Error('대화 기록 경로·크기를 확인해주세요.');
     const descriptor=fs.openSync(file,fs.constants.O_RDONLY|(fs.constants.O_NOFOLLOW??0));let saved;
-    try{const stat=fs.fstatSync(descriptor);if(!stat.isFile()||stat.size>32*1024*1024||fs.realpathSync(this.historyDirectory)!==this.historyDirectory)throw Error('대화 기록 경로·크기를 확인해주세요.');const bytes=fs.readFileSync(descriptor);if(bytes.length>32*1024*1024)throw Error('대화 기록 크기를 확인해주세요.');saved=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(bytes));}finally{fs.closeSync(descriptor);}
+    try{
+      const stat=fs.fstatSync(descriptor);if(!stat.isFile()||stat.size>32*1024*1024||fs.realpathSync(this.historyDirectory)!==this.historyDirectory)throw Error('대화 기록 경로·크기를 확인해주세요.');
+      const bytes=Buffer.alloc(stat.size+1);let count=0;
+      while(count<bytes.length){const read=fs.readSync(descriptor,bytes,count,bytes.length-count,null);if(!read)break;count+=read;}
+      const after=fs.fstatSync(descriptor);
+      if(count!==stat.size||['dev','ino','size','mtimeMs','ctimeMs'].some(key=>after[key]!==stat[key])||fs.realpathSync(this.historyDirectory)!==this.historyDirectory)throw Error('대화 기록이 읽는 중 변경됐어요. 원본을 확인해주세요.');
+      saved=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(bytes.subarray(0,count)));
+    }finally{fs.closeSync(descriptor);}
     if (saved.id !== id || saved.source !== 'onggi_bot' || !Array.isArray(saved.messages)) throw new Error('대화 기록 형식이 올바르지 않습니다.');
     const ids = new Set();
     saved.messages = saved.messages.filter(m => {
@@ -110,17 +125,17 @@ class Store {
     }).map(m => {
       const message = { ...m, status:['completed','failed','interrupted'].includes(m.status) ? m.status : 'interrupted', createdAt:Number.isFinite(m.createdAt) && m.createdAt >= 0 && m.createdAt <= 8640000000000000 ? m.createdAt : Date.now() };
       if(m.role==='assistant'&&Array.isArray(m.images))message.images=m.images.slice(0,8).filter(i=>i&&typeof i.itemId==='string'&&i.itemId.length<=256).map(i=>{
-        if(i.status==='ready'&&/^[a-f0-9]{64}$/.test(i.id)&&/^[a-f0-9]{64}$/.test(i.previewId)&&['image/png','image/jpeg','image/webp'].includes(i.mime)&&[i.width,i.height,i.bytes].every(Number.isSafeInteger)&&i.width>0&&i.height>0&&i.width<=4096&&i.height<=4096&&i.bytes>0&&i.bytes<=16*1024*1024)return{itemId:i.itemId,status:'ready',id:i.id,previewId:i.previewId,mime:i.mime,width:i.width,height:i.height,bytes:i.bytes};
+        if(i.status==='ready'&&typeof i.id==='string'&&/^[a-f0-9]{64}$/.test(i.id)&&typeof i.previewId==='string'&&/^[a-f0-9]{64}$/.test(i.previewId)&&['image/png','image/jpeg','image/webp'].includes(i.mime)&&[i.width,i.height,i.bytes].every(Number.isSafeInteger)&&i.width>0&&i.height>0&&i.width<=4096&&i.height<=4096&&i.bytes>0&&i.bytes<=16*1024*1024)return{itemId:i.itemId,status:'ready',id:i.id,previewId:i.previewId,mime:i.mime,width:i.width,height:i.height,bytes:i.bytes};
         return{itemId:i.itemId,status:'failed',error:i.status==='failed'&&typeof i.error==='string'?i.error.slice(0,500):'이전 이미지 생성이 중단됐어요. 대화를 다시 열어 결과를 확인해주세요.'};
       });else delete message.images;
-      if(m.role==='user'&&Array.isArray(m.attachments))message.attachments=m.attachments.slice(0,8).filter(a=>a&&/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(a.id)&&/^[a-f0-9]{64}$/.test(a.hash)&&typeof a.name==='string'&&a.name.length>0&&a.name.length<=256&&!/[\u0000-\u001f\u007f-\u009f]/u.test(a.name)&&Number.isSafeInteger(a.bytes)&&a.bytes>0&&a.bytes<=16*1024*1024&&/^\.[a-z0-9]{1,16}$/.test(a.extension)&&['file','image'].includes(a.kind)&&(!(a.kind==='image')||['image/png','image/jpeg','image/webp'].includes(a.mime)&&/^[a-f0-9]{64}$/.test(a.previewId)&&[a.width,a.height].every(n=>Number.isSafeInteger(n)&&n>0&&n<=4096))).map(a=>({id:a.id,kind:a.kind,name:a.name,bytes:a.bytes,hash:a.hash,extension:a.extension,...(a.kind==='image'?{mime:a.mime,width:a.width,height:a.height,previewId:a.previewId}:{})}));else delete message.attachments;
+      if(m.role==='user'&&Array.isArray(m.attachments))message.attachments=m.attachments.slice(0,8).filter(a=>a&&typeof a.id==='string'&&/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(a.id)&&typeof a.hash==='string'&&/^[a-f0-9]{64}$/.test(a.hash)&&typeof a.name==='string'&&a.name.length>0&&a.name.length<=256&&!/[\u0000-\u001f\u007f-\u009f]/u.test(a.name)&&Number.isSafeInteger(a.bytes)&&a.bytes>0&&a.bytes<=16*1024*1024&&typeof a.extension==='string'&&/^\.[a-z0-9]{1,16}$/.test(a.extension)&&['file','image'].includes(a.kind)&&(!(a.kind==='image')||['image/png','image/jpeg','image/webp'].includes(a.mime)&&typeof a.previewId==='string'&&/^[a-f0-9]{64}$/.test(a.previewId)&&[a.width,a.height].every(n=>Number.isSafeInteger(n)&&n>0&&n<=4096))).map(a=>({id:a.id,kind:a.kind,name:a.name,bytes:a.bytes,hash:a.hash,extension:a.extension,...(a.kind==='image'?{mime:a.mime,width:a.width,height:a.height,previewId:a.previewId}:{})}));else delete message.attachments;
       if (m.timing && typeof m.timing === 'object' && !Array.isArray(m.timing)) {
         message.timing = {};
         for (const key of ['receivedAt','submittedAt','enqueuedAt','queueStartedAt','cliSentAt','firstReplyAt','completedAt','renderedAt','inputMs','dispatchMs','cliMs','firstReplyMs','queueMs','renderMs','totalMs']) if (m.timing[key] === null || (Number.isFinite(m.timing[key]) && m.timing[key] >= 0)) message.timing[key] = m.timing[key];
         message.timing.mode = m.mode; message.timing.status = message.status;
       } else delete message.timing;
       if(!['conversation','summary','analyze','plan','review'].includes(m.purpose))delete message.purpose;
-      if(m.skill&&typeof m.skill.name==='string'&&m.skill.name.length<=200&&typeof m.skill.path==='string'&&path.isAbsolute(m.skill.path)&&m.skill.path.length<=8192&&!m.skill.path.includes('\u0000')&&/^[a-f0-9]{64}$/.test(m.skill.hash))message.skill={name:m.skill.name,path:m.skill.path,hash:m.skill.hash};else delete message.skill;
+      if(m.skill&&typeof m.skill.name==='string'&&m.skill.name.length<=200&&typeof m.skill.path==='string'&&path.isAbsolute(m.skill.path)&&m.skill.path.length<=8192&&!m.skill.path.includes('\u0000')&&typeof m.skill.hash==='string'&&/^[a-f0-9]{64}$/.test(m.skill.hash))message.skill={name:m.skill.name,path:m.skill.path,hash:m.skill.hash};else delete message.skill;
       if(m.progress&&typeof m.progress==='object')message.progress={plan:Array.isArray(m.progress.plan)?m.progress.plan.slice(0,24).filter(item=>item&&typeof item.step==='string'&&['pending','inProgress','completed'].includes(item.status)).map(item=>({step:item.step.slice(0,300),status:item.status})):[],tools:Array.isArray(m.progress.tools)?m.progress.tools.slice(-24).filter(item=>item&&typeof item.id==='string'&&typeof item.label==='string'&&['commandExecution','fileChange','mcpToolCall','webSearch'].includes(item.type)&&['running','failed','completed','stopped','declined'].includes(item.status)).map(item=>({id:item.id.slice(0,256),label:item.label.slice(0,180),type:item.type,status:item.status})):[]};else delete message.progress;
       if(m.tokenUsage&&typeof m.tokenUsage==='object'){
         message.tokenUsage={};for(const slot of ['total','last']){const value=m.tokenUsage[slot];if(value&&['totalTokens','inputTokens','outputTokens'].every(key=>Number.isSafeInteger(value[key])&&value[key]>=0))message.tokenUsage[slot]={totalTokens:value.totalTokens,inputTokens:value.inputTokens,outputTokens:value.outputTokens};}
@@ -167,8 +182,15 @@ class Store {
       if(fs.existsSync(this.journalFile))throw new Error('진행 중인 저장 복구를 먼저 완료해주세요.');
       if(fs.realpathSync(this.directory)!==this.directory||fs.realpathSync(this.historyDirectory)!==this.historyDirectory)throw Error('삭제 폴더 경로를 확인해주세요.');
       for(const file of [this.deleteFile,this.file,this.file+'.tmp']){let stat;try{stat=fs.lstatSync(file);}catch(error){if(error.code==='ENOENT')continue;throw error;}if(stat.isSymbolicLink()||!stat.isFile())throw Error('삭제 파일 경로를 확인해주세요.');}
-      if(fs.statSync(this.deleteFile).size>65536)throw new Error('삭제 저널 크기가 올바르지 않습니다.');
-      const pending=JSON.parse(fs.readFileSync(this.deleteFile,'utf8'));
+      const descriptor=fs.openSync(this.deleteFile,fs.constants.O_RDONLY|(fs.constants.O_NOFOLLOW??0));let pending;
+      try{
+        const stat=fs.fstatSync(descriptor);if(!stat.isFile()||stat.size>65536)throw Error('삭제 저널 크기·경로를 확인해주세요.');
+        const bytes=Buffer.alloc(stat.size+1);let count=0;
+        while(count<bytes.length){const read=fs.readSync(descriptor,bytes,count,bytes.length-count,null);if(!read)break;count+=read;}
+        const after=fs.fstatSync(descriptor),named=fs.lstatSync(this.deleteFile);
+        if(count!==stat.size||!named.isFile()||['dev','ino','size','mtimeMs','ctimeMs'].some(key=>after[key]!==stat[key]||named[key]!==stat[key])||fs.realpathSync(this.directory)!==this.directory||fs.realpathSync(this.historyDirectory)!==this.historyDirectory)throw Error('삭제 저널이 읽는 중 변경됐어요. 원본을 확인해주세요.');
+        pending=JSON.parse(new TextDecoder('utf-8',{fatal:true,ignoreBOM:true}).decode(bytes.subarray(0,count)));
+      }finally{fs.closeSync(descriptor);}
       if(pending.version!==1||!['pending','cli-deleted'].includes(pending.phase)||!/^[a-f0-9-]{36}$/.test(pending.id)||!Array.isArray(pending.ids)||!pending.ids.includes(pending.id)||!pending.ids.every(id=>typeof id==='string'&&/^[a-f0-9-]{36}$/.test(id)))throw new Error('삭제 저널 형식이 올바르지 않습니다.');
       this.pendingDeletion=pending;
       if(pending.phase==='pending'){
@@ -182,8 +204,15 @@ class Store {
         let staged;try{staged=fs.lstatSync(file+'.tmp');}catch(error){if(error.code!=='ENOENT')throw error;}if(staged&&(staged.isSymbolicLink()||!staged.isFile()))throw Error('삭제 임시 파일 경로를 확인해주세요.');
         if(fs.existsSync(file)){
           if(fs.lstatSync(file).isSymbolicLink()||!fs.statSync(file).isFile())throw Error('삭제 기록 경로를 확인해주세요.');
-          if(fs.statSync(file).size>32*1024*1024)throw new Error('삭제 기록 크기를 확인해주세요.');
-          const history=JSON.parse(fs.readFileSync(file,'utf8'));
+          const descriptor=fs.openSync(file,fs.constants.O_RDONLY|(fs.constants.O_NOFOLLOW??0));let history;
+          try{
+            const stat=fs.fstatSync(descriptor);if(!stat.isFile()||stat.size>32*1024*1024)throw Error('삭제 기록 크기·경로를 확인해주세요.');
+            const bytes=Buffer.alloc(stat.size+1);let count=0;
+            while(count<bytes.length){const read=fs.readSync(descriptor,bytes,count,bytes.length-count,null);if(!read)break;count+=read;}
+            const after=fs.fstatSync(descriptor),named=fs.lstatSync(file);
+            if(count!==stat.size||!named.isFile()||['dev','ino','size','mtimeMs','ctimeMs'].some(key=>after[key]!==stat[key]||named[key]!==stat[key])||fs.realpathSync(this.directory)!==this.directory||fs.realpathSync(this.historyDirectory)!==this.historyDirectory)throw Error('삭제 기록이 읽는 중 변경됐어요. 원본을 확인해주세요.');
+            history=JSON.parse(new TextDecoder('utf-8',{fatal:true,ignoreBOM:true}).decode(bytes.subarray(0,count)));
+          }finally{fs.closeSync(descriptor);}
           if(history.id!==id||history.source!=='onggi_bot')throw new Error('삭제 기록의 소유 정보가 올바르지 않습니다.');
         }
       }
@@ -203,17 +232,34 @@ class Store {
     if (!fs.existsSync(this.journalFile)) return;
     if(fs.realpathSync(this.directory)!==this.directory||fs.realpathSync(this.historyDirectory)!==this.historyDirectory)throw Error('저장 복구 폴더의 경로가 바뀌었습니다.');
     for(const file of [this.journalFile,this.file,this.file+'.tmp']){let stat;try{stat=fs.lstatSync(file);}catch(error){if(error.code==='ENOENT')continue;throw error;}if(stat.isSymbolicLink()||!stat.isFile())throw Error('복구 파일의 link/directory 경로를 확인해주세요.');}
-    if (fs.statSync(this.journalFile).size > 1024) throw new Error('저장 저널 크기가 올바르지 않습니다.');
-    const journal=JSON.parse(fs.readFileSync(this.journalFile,'utf8'));
+    const descriptor=fs.openSync(this.journalFile,fs.constants.O_RDONLY|(fs.constants.O_NOFOLLOW??0));let journal;
+    try{
+      const stat=fs.fstatSync(descriptor);if(!stat.isFile()||stat.size>1024)throw Error('저장 저널 크기·경로를 확인해주세요.');
+      const bytes=Buffer.alloc(stat.size+1);let count=0;
+      while(count<bytes.length){const read=fs.readSync(descriptor,bytes,count,bytes.length-count,null);if(!read)break;count+=read;}
+      const after=fs.fstatSync(descriptor),named=fs.lstatSync(this.journalFile);
+      if(count!==stat.size||!named.isFile()||['dev','ino','size','mtimeMs','ctimeMs'].some(key=>after[key]!==stat[key]||named[key]!==stat[key])||fs.realpathSync(this.directory)!==this.directory||fs.realpathSync(this.historyDirectory)!==this.historyDirectory)throw Error('저장 저널이 읽는 중 변경됐어요. 원본을 확인해주세요.');
+      journal=JSON.parse(new TextDecoder('utf-8',{fatal:true,ignoreBOM:true}).decode(bytes.subarray(0,count)));
+    }finally{fs.closeSync(descriptor);}
     if (journal.version!==1 || !/^[a-f0-9-]{36}$/.test(journal.historyId) || !/^[a-f0-9]{64}$/.test(journal.stateHash) || !/^[a-f0-9]{64}$/.test(journal.historyHash)) throw new Error('저장 저널 형식이 올바르지 않습니다.');
     const historyFile=path.join(this.historyDirectory,journal.historyId+'.json');
     for(const file of [historyFile,historyFile+'.tmp']){let stat;try{stat=fs.lstatSync(file);}catch(error){if(error.code==='ENOENT')continue;throw error;}if(stat.isSymbolicLink()||!stat.isFile())throw Error('대화 복구 파일 경로를 확인해주세요.');}
     const statePending=fs.existsSync(this.file+'.tmp'), historyPending=fs.existsSync(historyFile+'.tmp');
     const statePath=statePending?this.file+'.tmp':this.file,historyPath=historyPending?historyFile+'.tmp':historyFile;
-    if (fs.statSync(statePath).size>8*1024*1024 || fs.statSync(historyPath).size>32*1024*1024) throw new Error('복구 파일 크기가 한도를 초과합니다.');
-    const stateText=fs.readFileSync(statePath,'utf8'),historyText=fs.readFileSync(historyPath,'utf8');
-    if (createHash('sha256').update(stateText).digest('hex')!==journal.stateHash || createHash('sha256').update(historyText).digest('hex')!==journal.historyHash) throw new Error('복구 파일이 저장 저널과 일치하지 않습니다.');
-    const state=JSON.parse(stateText),history=JSON.parse(historyText);
+    const recovered=[];
+    for(const [file,limit]of [[statePath,8*1024*1024],[historyPath,32*1024*1024]]){
+      const descriptor=fs.openSync(file,fs.constants.O_RDONLY|(fs.constants.O_NOFOLLOW??0));
+      try{
+        const stat=fs.fstatSync(descriptor);if(!stat.isFile()||stat.size>limit)throw Error('복구 파일 크기·경로를 확인해주세요.');
+        const bytes=Buffer.alloc(stat.size+1);let count=0;
+        while(count<bytes.length){const read=fs.readSync(descriptor,bytes,count,bytes.length-count,null);if(!read)break;count+=read;}
+        const after=fs.fstatSync(descriptor),named=fs.lstatSync(file);
+        if(count!==stat.size||!named.isFile()||['dev','ino','size','mtimeMs','ctimeMs'].some(key=>after[key]!==stat[key]||named[key]!==stat[key])||fs.realpathSync(this.directory)!==this.directory||fs.realpathSync(this.historyDirectory)!==this.historyDirectory)throw Error('복구 파일이 읽는 중 변경됐어요. 원본을 확인해주세요.');
+        recovered.push({text:new TextDecoder('utf-8',{fatal:true,ignoreBOM:true}).decode(bytes.subarray(0,count)),hash:createHash('sha256').update(bytes.subarray(0,count)).digest('hex')});
+      }finally{fs.closeSync(descriptor);}
+    }
+    if(recovered[0].hash!==journal.stateHash||recovered[1].hash!==journal.historyHash)throw Error('복구 파일이 저장 저널과 일치하지 않습니다.');
+    const state=JSON.parse(recovered[0].text),history=JSON.parse(recovered[1].text);
     if (state.version!==2 || state.activeConversationId!==journal.historyId || !state.conversations?.some(c=>c.id===journal.historyId&&c.source==='onggi_bot') || history.id!==journal.historyId || history.source!=='onggi_bot' || !Array.isArray(history.messages)) throw new Error('복구 대화의 소유 정보가 올바르지 않습니다.');
     if (historyPending) fs.renameSync(historyFile+'.tmp',historyFile);
     if (statePending) fs.renameSync(this.file+'.tmp',this.file);

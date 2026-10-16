@@ -5,6 +5,7 @@ module.exports=async({pet,panel,store})=>{
   const previous=store.data.settings.buddyName,threadId=store.data.threadId,conversationId=store.data.activeConversationId;
   const historyFile=path.join(store.historyDirectory,conversationId+'.json'),history=fs.readFileSync(historyFile,'utf8');
   try{
+    const artifactRoot=path.resolve(process.env.ONGGI_SMOKE_ROOT??path.join(__dirname,'..','artifacts'));fs.mkdirSync(artifactRoot,{recursive:true});
     const result=await panel.webContents.executeJavaScript(`(async()=>{
       document.querySelector('[data-tab="settings"]').click();
       const input=document.querySelector('#buddy-name');input.value='  포근이  ';input.dispatchEvent(new Event('input'));
@@ -36,8 +37,8 @@ module.exports=async({pet,panel,store})=>{
     await panel.webContents.executeJavaScript(`document.querySelector('[data-character="onggi-sprout"]').click()`);
     await new Promise(r=>setTimeout(r,150));
     if(store.data.settings.buddyName!=='포근이')throw Error('Character change reset name');
-    fs.writeFileSync(path.join(__dirname,'..','artifacts','buddy-name-settings.png'),(await panel.webContents.capturePage()).toPNG());
-    fs.writeFileSync(path.join(__dirname,'..','artifacts','buddy-name-smoke.json'),JSON.stringify({verifiedAt:new Date().toISOString(),platform:process.platform,...result,persisted:true,conversationPreserved:true,petSynchronized:true,petRejected,characterIndependent:true},null,2));
+    fs.writeFileSync(path.join(artifactRoot,'buddy-name-settings.png'),(await panel.webContents.capturePage()).toPNG());
+    fs.writeFileSync(path.join(artifactRoot,'buddy-name-smoke.json'),JSON.stringify({verifiedAt:new Date().toISOString(),platform:process.platform,...result,persisted:true,conversationPreserved:true,petSynchronized:true,petRejected,characterIndependent:true},null,2));
     console.log('BUDDY_NAME_UI_PERSISTENCE_AND_BOUNDARY_OK',JSON.stringify(result));
   }finally{
     await panel.webContents.executeJavaScript(`(async()=>{await window.onggi.action('rename-buddy',{name:${JSON.stringify(previous)}});await window.onggi.action('select-character',{id:'onggi-clip'});document.querySelector('[data-tab="chat"]').click();})()`);

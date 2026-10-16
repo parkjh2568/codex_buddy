@@ -17,6 +17,7 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
   if(method==='config/read')send({id,result:{config:{model:'gpt-5.6-luna',model_reasoning_effort:'high'}}});
   if(method==='thread/start'){const thread={id:'fixture-thread-'+(++saved.sequence),threadSource:params.threadSource,turns:[]};threads.set(thread.id,thread);persist();send({id,result:{thread}});}
   if(method==='thread/read'||method==='thread/resume'){const thread=threads.get(params.threadId);if(thread)send({id,result:{thread}});else send({id,error:{code:-32600,message:'thread not loaded: '+params.threadId}});}
+  if(method==='thread/turns/list'||method==='thread/items/list')send({id,error:{code:-32601,message:'This fixture models an older CLI without history pages'}});
   if(method==='turn/start'){
     if(!saved.authenticated){send({id,error:{code:401,message:'Login required'}});return;}
     const thread=threads.get(params.threadId),turn={id:'fixture-turn-'+(++saved.sequence),status:'inProgress',items:[{type:'userMessage',id:params.clientUserMessageId,content:params.input}],startedAt:Date.now()};thread.turns.push(turn);persist();

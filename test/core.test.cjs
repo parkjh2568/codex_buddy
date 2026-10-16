@@ -8,6 +8,96 @@ const { loadPack } = require('../src/packs.cjs');
 const { Store } = require('../src/store.cjs');
 const { CodexConnection } = require('../src/codex.cjs');
 const { ModelCatalog } = require('../src/models.cjs');
+const { createHash } = require('node:crypto');
+
+test('state reads accept the byte limit with partial reads and reject oversized files before reading',t=>{
+  const root=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'onggi-state-bounded-')));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));const file=path.join(root,'state.json'),text=JSON.stringify({version:2,settings:{buddyName:'preserve'},activeConversationId:null,conversations:[]}),read=fs.readSync;
+  fs.writeFileSync(file,text+' '.repeat(8*1024*1024-Buffer.byteLength(text)));let calls=0,maxBuffer=0;
+  t.mock.method(fs,'readSync',(fd,bytes,offset,length,position)=>{calls++;maxBuffer=Math.max(maxBuffer,bytes.length);return read(fd,bytes,offset,Math.min(length,1024*1024),position);});
+  assert.equal(new Store(root,{}).data.settings.buddyName,'preserve');assert.ok(calls>8);assert.equal(maxBuffer,8*1024*1024+1);
+  calls=0;fs.appendFileSync(file,' ');const oversized=new Store(root,{});assert.match(oversized.warning,/크기/);assert.equal(calls,0);assert.equal(fs.statSync(file).size,8*1024*1024+1);
+});
+
+test('state read changes and invalid UTF-8 preserve originals and close their descriptors',t=>{
+  for(const mode of ['grow','shrink','same-size','replace','read-error','invalid-utf8','bom']){
+    const root=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'onggi-state-changing-')));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));const file=path.join(root,'state.json'),text=JSON.stringify({version:2,settings:{buddyName:'preserve'},activeConversationId:null,conversations:[]})+'  ',read=fs.readSync,open=fs.openSync;let fd,changed=false,maxBuffer=0,totalRead=0;
+    let initial=Buffer.from(text);if(mode==='invalid-utf8'){const offset=text.indexOf('preserve');initial=Buffer.concat([initial.subarray(0,offset),Buffer.from([255]),initial.subarray(offset+1)]);}else if(mode==='bom')initial=Buffer.concat([Buffer.from([239,187,191]),initial]);fs.writeFileSync(file,initial);
+    const opened=t.mock.method(fs,'openSync',(target,...args)=>{const descriptor=open(target,...args);if(target===file&&fd===undefined)fd=descriptor;return descriptor;});
+    const reading=t.mock.method(fs,'readSync',(descriptor,bytes,offset,length,position)=>{if(descriptor===fd){maxBuffer=Math.max(maxBuffer,bytes.length);if(!changed){changed=true;if(mode==='grow')fs.appendFileSync(file,Buffer.alloc(2*1024*1024,32));else if(mode==='shrink')fs.truncateSync(file,initial.length-1);else if(mode==='same-size'){fs.writeFileSync(file,text.slice(0,-2)+'\n ');const future=new Date(Date.now()+1000);fs.utimesSync(file,future,future);}else if(mode==='replace'){fs.renameSync(file,file+'.external-original');fs.writeFileSync(file,text);}else if(mode==='read-error')throw Error('injected state read error');}}const count=read(descriptor,bytes,offset,length,position);if(descriptor===fd)totalRead+=count;return count;});
+    try{const loaded=new Store(root,{});reading.mock.restore();opened.mock.restore();assert.ok(loaded.warning,mode);assert.notEqual(loaded.data.settings.buddyName,'�reserve');assert.throws(()=>fs.fstatSync(fd),/EBADF/);assert.equal(maxBuffer,initial.length+1);assert.ok(totalRead<=initial.length+1);if(mode==='invalid-utf8'||mode==='bom')assert.ok(fs.readFileSync(file).equals(initial));assert.ok(fs.readdirSync(root).some(name=>name.startsWith('state.json.backup-')),mode);if(mode==='replace')assert.ok(fs.readFileSync(file+'.external-original').equals(initial));}finally{reading.mock.restore();opened.mock.restore();}
+  }
+});
+
+test('save recovery bounds every input and preserves staged files and journal on read failures',t=>{
+  for(const kind of ['journal','state','history'])for(const mode of ['grow','shrink','same-size','replace','read-error','invalid-utf8','oversized']){
+    const root=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'onggi-recovery-bounded-')));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));const store=new Store(root,{}),id='12345678-1234-1234-1234-123456789abc',historyFile=path.join(store.historyDirectory,id+'.json'),statePath=store.file+'.tmp',historyPath=historyFile+'.tmp',oldState=JSON.stringify({version:2,settings:{},activeConversationId:null,conversations:[]});
+    const staged=new Map([[statePath,Buffer.from(JSON.stringify({version:2,settings:{buddyName:'preserve'},activeConversationId:id,conversations:[{id,source:'onggi_bot',title:'preserve'}]})+'  ')],[historyPath,Buffer.from(JSON.stringify({id,source:'onggi_bot',messages:[{id:'u',role:'user',text:'preserve',status:'completed'}]})+'  ')]]),target=kind==='journal'?store.journalFile:kind==='state'?statePath:historyPath,limit=kind==='journal'?1024:kind==='state'?8*1024*1024:32*1024*1024;
+    if(mode==='invalid-utf8'&&kind!=='journal'){const bytes=staged.get(target),offset=bytes.indexOf('preserve');staged.set(target,Buffer.concat([bytes.subarray(0,offset),Buffer.from([255]),bytes.subarray(offset+1)]));}
+    fs.writeFileSync(store.file,oldState);for(const [file,bytes]of staged)fs.writeFileSync(file,bytes);
+    let journal=Buffer.from(JSON.stringify({version:1,historyId:id,stateHash:createHash('sha256').update(staged.get(statePath)).digest('hex'),historyHash:createHash('sha256').update(staged.get(historyPath)).digest('hex'),note:'preserve'})+'  ');
+    if(mode==='invalid-utf8'&&kind==='journal'){const offset=journal.indexOf('preserve');journal=Buffer.concat([journal.subarray(0,offset),Buffer.from([255]),journal.subarray(offset+1)]);}fs.writeFileSync(store.journalFile,journal);
+    if(mode==='oversized')fs.appendFileSync(target,Buffer.alloc(limit+1-fs.statSync(target).size,32));
+    const initial=fs.readFileSync(target),read=fs.readSync,open=fs.openSync;let fd,tracking=false,changed=false,maxBuffer=0,totalRead=0;
+    const opened=t.mock.method(fs,'openSync',(file,...args)=>{const descriptor=open(file,...args);if(file===target&&fd===undefined){fd=descriptor;tracking=true;}else if(descriptor===fd)tracking=false;return descriptor;});
+    const reading=t.mock.method(fs,'readSync',(descriptor,bytes,offset,length,position)=>{if(descriptor===fd&&tracking){maxBuffer=Math.max(maxBuffer,bytes.length);if(!changed){changed=true;if(mode==='grow')fs.appendFileSync(target,Buffer.alloc(2*1024*1024,32));else if(mode==='shrink')fs.truncateSync(target,initial.length-1);else if(mode==='same-size'){fs.writeFileSync(target,Buffer.concat([initial.subarray(0,-2),Buffer.from('\n ')]));const future=new Date(Date.now()+1000);fs.utimesSync(target,future,future);}else if(mode==='replace'){fs.renameSync(target,target+'.external-original');fs.writeFileSync(target,initial);}else if(mode==='read-error')throw Error('injected recovery read error');}}const count=read(descriptor,bytes,offset,length,position);if(descriptor===fd&&tracking)totalRead+=count;return count;});
+    try{const loaded=new Store(root,{});reading.mock.restore();opened.mock.restore();assert.equal(loaded.writeBlocked,true,kind+' '+mode);assert.ok(loaded.warning);assert.equal(fs.readFileSync(store.file,'utf8'),oldState);assert.ok(fs.existsSync(store.journalFile));assert.ok(fs.existsSync(statePath));assert.ok(fs.existsSync(historyPath));assert.equal(fs.existsSync(historyFile),false);assert.throws(()=>fs.fstatSync(fd),/EBADF/);if(mode==='oversized'){assert.equal(maxBuffer,0);assert.equal(totalRead,0);}else{assert.equal(maxBuffer,initial.length+1);assert.ok(totalRead<=initial.length+1);}if(mode==='invalid-utf8')assert.ok(fs.readFileSync(target).equals(initial));}finally{reading.mock.restore();opened.mock.restore();}
+  }
+});
+
+test('save recovery accepts exact journal, index and history byte limits with partial reads',t=>{
+  for(const kind of ['journal','state','history']){
+    const root=fs.mkdtempSync(path.join(os.tmpdir(),'onggi-recovery-limit-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));const store=new Store(root,{}),id='12345678-1234-1234-1234-123456789abc',history=path.join(store.historyDirectory,id+'.json'),statePath=store.file+'.tmp',historyPath=history+'.tmp';
+    let state=JSON.stringify({version:2,settings:{},activeConversationId:id,conversations:[{id,source:'onggi_bot',title:'preserve'}]}),messages=JSON.stringify({id,source:'onggi_bot',messages:[{id:'u',role:'user',text:'preserve',status:'completed'}]});
+    if(kind==='state')state+=' '.repeat(8*1024*1024-Buffer.byteLength(state));if(kind==='history')messages+=' '.repeat(32*1024*1024-Buffer.byteLength(messages));fs.writeFileSync(statePath,state);fs.writeFileSync(historyPath,messages);
+    let journal=JSON.stringify({version:1,historyId:id,stateHash:createHash('sha256').update(state).digest('hex'),historyHash:createHash('sha256').update(messages).digest('hex')});if(kind==='journal')journal+=' '.repeat(1024-Buffer.byteLength(journal));fs.writeFileSync(store.journalFile,journal);
+    const target=kind==='journal'?store.journalFile:kind==='state'?statePath:historyPath,limit=kind==='journal'?1024:kind==='state'?8*1024*1024:32*1024*1024,open=fs.openSync,read=fs.readSync;let fd,calls=0,maxBuffer=0;
+    const opened=t.mock.method(fs,'openSync',(file,...args)=>{const descriptor=open(file,...args);if(file===target)fd=descriptor;return descriptor;}),reading=t.mock.method(fs,'readSync',(descriptor,bytes,offset,length,position)=>{if(descriptor===fd){calls++;maxBuffer=Math.max(maxBuffer,bytes.length);}return read(descriptor,bytes,offset,Math.min(length,65536),position);});
+    try{store.recoverPendingSave();reading.mock.restore();opened.mock.restore();assert.equal(fs.existsSync(store.journalFile),false);assert.equal(fs.existsSync(statePath),false);assert.equal(fs.existsSync(historyPath),false);assert.equal(fs.readFileSync(store.file,'utf8'),state);assert.equal(fs.readFileSync(history,'utf8'),messages);assert.equal(maxBuffer,limit+1);assert.ok(calls>1);assert.throws(()=>fs.fstatSync(fd),/EBADF/);}finally{reading.mock.restore();opened.mock.restore();}
+  }
+});
+
+test('deletion recovery bounds journals and histories and never removes changed or undecodable records',t=>{
+  for(const kind of ['journal','history'])for(const mode of ['grow','shrink','same-size','replace','read-error','invalid-utf8','oversized']){
+    const root=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'onggi-delete-bounded-')));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));const store=new Store(root,{});store.data.messages=[{id:'u',role:'user',text:'preserve',status:'completed'}];store.save();const id=store.data.activeConversationId,file=path.join(store.historyDirectory,id+'.json'),state=fs.readFileSync(store.file),target=kind==='journal'?store.deleteFile:file,limit=kind==='journal'?65536:32*1024*1024;
+    fs.writeFileSync(store.deleteFile,JSON.stringify({version:1,id,ids:[id],phase:'cli-deleted',threadId:null,codexPath:null,workspace:null,note:'preserve'})+'  ');fs.appendFileSync(file,'  ');
+    if(mode==='invalid-utf8'){const bytes=fs.readFileSync(target),offset=bytes.indexOf('preserve');fs.writeFileSync(target,Buffer.concat([bytes.subarray(0,offset),Buffer.from([255]),bytes.subarray(offset+1)]));}else if(mode==='oversized')fs.appendFileSync(target,Buffer.alloc(limit+1-fs.statSync(target).size,32));
+    const initial=fs.readFileSync(target),read=fs.readSync,open=fs.openSync;let fd,changed=false,maxBuffer=0,totalRead=0;
+    const opened=t.mock.method(fs,'openSync',(location,...args)=>{const descriptor=open(location,...args);if(location===target&&fd===undefined)fd=descriptor;return descriptor;});
+    const reading=t.mock.method(fs,'readSync',(descriptor,bytes,offset,length,position)=>{if(descriptor===fd){maxBuffer=Math.max(maxBuffer,bytes.length);if(!changed){changed=true;if(mode==='grow')fs.appendFileSync(target,Buffer.alloc(2*1024*1024,32));else if(mode==='shrink')fs.truncateSync(target,initial.length-1);else if(mode==='same-size'){fs.writeFileSync(target,Buffer.concat([initial.subarray(0,-2),Buffer.from('\n ')]));const future=new Date(Date.now()+1000);fs.utimesSync(target,future,future);}else if(mode==='replace'){fs.renameSync(target,target+'.external-original');fs.writeFileSync(target,initial);}else if(mode==='read-error')throw Error('injected deletion read error');}}const count=read(descriptor,bytes,offset,length,position);if(descriptor===fd)totalRead+=count;return count;});
+    try{assert.throws(()=>store.recoverPendingDeletion(),mode==='read-error'?/injected deletion read error/:mode==='oversized'?/크기/:mode==='invalid-utf8'?/UTF-8|encoded data/:/변경/);reading.mock.restore();opened.mock.restore();assert.equal(store.writeBlocked,true);assert.ok(fs.readFileSync(store.file).equals(state));assert.ok(fs.existsSync(file));assert.ok(fs.existsSync(store.deleteFile));assert.equal(store.data.activeConversationId,id);assert.throws(()=>fs.fstatSync(fd),/EBADF/);if(mode==='oversized'){assert.equal(maxBuffer,0);assert.equal(totalRead,0);}else{assert.equal(maxBuffer,initial.length+1);assert.ok(totalRead<=initial.length+1);}if(mode==='invalid-utf8')assert.ok(fs.readFileSync(target).equals(initial));}finally{reading.mock.restore();opened.mock.restore();}
+  }
+});
+
+test('deletion recovery accepts exact journal and history byte limits with partial reads',t=>{
+  for(const kind of ['journal','history']){
+    const root=fs.mkdtempSync(path.join(os.tmpdir(),'onggi-delete-limit-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));const store=new Store(root,{});store.data.messages=[{id:'u',role:'user',text:'preserve',status:'completed'}];store.save();const id=store.data.activeConversationId,file=path.join(store.historyDirectory,id+'.json');fs.writeFileSync(store.deleteFile,JSON.stringify({version:1,id,ids:[id],phase:'cli-deleted',threadId:null,codexPath:null,workspace:null}));
+    const target=kind==='journal'?store.deleteFile:file,limit=kind==='journal'?65536:32*1024*1024;fs.appendFileSync(target,' '.repeat(limit-fs.statSync(target).size));const open=fs.openSync,read=fs.readSync;let fd,calls=0,maxBuffer=0;
+    const opened=t.mock.method(fs,'openSync',(location,...args)=>{const descriptor=open(location,...args);if(location===target)fd=descriptor;return descriptor;}),reading=t.mock.method(fs,'readSync',(descriptor,bytes,offset,length,position)=>{if(descriptor===fd){calls++;maxBuffer=Math.max(maxBuffer,bytes.length);}return read(descriptor,bytes,offset,Math.min(length,65536),position);});
+    try{store.recoverPendingDeletion();reading.mock.restore();opened.mock.restore();assert.equal(fs.existsSync(store.deleteFile),false);assert.equal(fs.existsSync(file),false);assert.equal(store.data.activeConversationId,null);assert.equal(store.data.conversations.length,0);assert.equal(maxBuffer,limit+1);assert.ok(calls>1);assert.throws(()=>fs.fstatSync(fd),/EBADF/);}finally{reading.mock.restore();opened.mock.restore();}
+  }
+});
+
+test('history reads accept the exact byte limit with bounded partial reads and reject larger files before reading',t=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'onggi-history-bounded-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));const store=new Store(root,{}),id='12345678-1234-1234-1234-123456789abc',file=path.join(store.historyDirectory,id+'.json');
+  const text=JSON.stringify({id,source:'onggi_bot',messages:[{id:'kept',role:'user',text:'한글',status:'completed'}]});fs.writeFileSync(file,text+' '.repeat(32*1024*1024-Buffer.byteLength(text)));
+  const read=fs.readSync;let calls=0,maxBuffer=0;t.mock.method(fs,'readSync',(fd,bytes,offset,length,position)=>{calls++;maxBuffer=Math.max(maxBuffer,bytes.length);return read(fd,bytes,offset,Math.min(length,1024*1024),position);});
+  assert.equal(store.readHistory(id).messages[0].text,'한글');assert.ok(calls>32);assert.equal(maxBuffer,32*1024*1024+1);
+  calls=0;fs.appendFileSync(file,' ');assert.throws(()=>store.readHistory(id),/크기/);assert.equal(calls,0);
+});
+
+test('history descriptor reads reject growth, shrink and same-size mutation and close on every failure',t=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'onggi-history-changing-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));const store=new Store(root,{}),id='12345678-1234-1234-1234-123456789abc',file=path.join(store.historyDirectory,id+'.json'),text=JSON.stringify({id,source:'onggi_bot',messages:[]})+'  ',read=fs.readSync;
+  for(const mode of ['grow','shrink','same-size','read-error']){
+    fs.writeFileSync(file,text);let fd,changed=false;
+    const mock=t.mock.method(fs,'readSync',(descriptor,bytes,offset,length,position)=>{fd=descriptor;if(!changed){changed=true;if(mode==='grow')fs.appendFileSync(file,' ');else if(mode==='shrink')fs.truncateSync(file,Buffer.byteLength(text)-1);else if(mode==='same-size'){fs.writeFileSync(file,text.slice(0,-2)+'\n ');const future=new Date(Date.now()+1000);fs.utimesSync(file,future,future);}else throw Error('injected read error');}return read(descriptor,bytes,offset,length,position);});
+    try{assert.throws(()=>store.readHistory(id),mode==='read-error'?/injected read error/:/변경/);assert.throws(()=>fs.fstatSync(fd),/EBADF/);}finally{mock.mock.restore();}
+  }
+});
+
+test('bounded history reads reject invalid UTF-8 and malformed JSON without normalizing their originals',t=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'onggi-history-decode-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));const store=new Store(root,{}),id='12345678-1234-1234-1234-123456789abc',file=path.join(store.historyDirectory,id+'.json');
+  for(const bytes of [Buffer.from([123,255,125]),Buffer.from('{"messages":')]){fs.writeFileSync(file,bytes);assert.throws(()=>store.readHistory(id));assert.ok(fs.readFileSync(file).equals(bytes));}
+});
 
 test('character packs reject escape paths, executable SVG and unknown schemas; missing states fall back', t => {
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'onggi-pack-test-')); t.after(()=>fs.rmSync(root,{recursive:true,force:true}));

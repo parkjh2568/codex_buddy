@@ -1,24 +1,31 @@
 # Alpha 0.1 검증 범위
 
-일반 실행 경로의 macOS arm64 앱은 alpha.14이며 이번 Info.plist 확인값은 CFBundleVersion 30이다. 기존 전달 기록의 build29 표기와 구분한다. 이미지/파일 첨부·불변 사본·일반/미니 FIFO까지 적용돼 있다. 이번 정리 작업은 [실행 결과](CLEANUP_RESULT_2026-10-10.md)에서 소스와 staging의 검증 및 설치 여부를 따로 기록한다.
+최신 개발 소스와 staging 후보는 alpha22/build38이다. [Mac 후속 결과](MAC_FOLLOWUP_RESULT_2026-10-15.md)에 수정 내용·전후 원자료·환경·실패/미검증을 기록한다. 다음 수치는 해당 구현 검증의 결과이며 문서 정리에서 다시 실행한 검사 수가 아니다.
 
-최신 소스 alpha.16와 별도 staging build32는 [변경 이슈 수정 결과](CHANGE_REMEDIATION_RESULT_2026-10-10.md)를 따른다. 단위 110개·격리 Electron 14종과 현재 소스 해시를 대조했고 편집 reload·스크롤 읽음·검색 순서·도구 거절·알림·종료 예외를 확인했다. 현재 macOS 묶음의 로컬 ad-hoc 서명을 검증했다. 이번 수정은 실제 모델을 추가 호출하지 않았으며 기존 일반 실행 앱은 교체하지 않았다.
+| 범위 | 확인한 결과 |
+|---|---|
+| 소스 검사 | 단위 190개·lint/check·격리 Electron 15종 |
+| 패키지 | 85개 파일·strict ad-hoc 서명·패키지 자체 격리 실행 |
+| 저장·요청 | state/복구 저널 제한 읽기·첨부 비동기 수명·원격 최신 25턴부터 명시적 단계 조회 |
+| UI | 말투 옆 `+`·답변 중심 심플·보호 해제 후 30초 전체 숨김·네 모서리 조절·3크기×3스킨 정렬 |
+| macOS 자동 조작 | 실제 파일 선택기 다중 첨부/취소·네 모서리 조절·승인된 OS 클립보드 API/픽셀 일치/원본 write 복원 |
+| 자원 | 전후 CPU/I/O·대용량 저장·이미지 비용 및 ASAR 5상태×60초 관찰. 측정 한계와 원자료는 결과 문서 |
 
-alpha.15/build31의 실제 CLI 기능 조회·모델 2회·알림 show 및 당시 검증은 [버디 확장 기록](BUDDY_EXPANSION_RESULT_2026-10-10.md)에 유지한다. OS 배너·클릭과 다른 모델/제공자·플랫폼은 이번 수정의 검증 범위에 포함하지 않는다.
+실제 모델 질문은 해당 후속 작업에서 추가하지 않았다. 실제 응답과 체험 응답, fixture와 OS 실기는 구분한다. 현재 기능의 사용법은 [README](../README.md), 설계 계약은 [ARCHITECTURE](ARCHITECTURE.md)를 따른다.
 
-## 기준 릴리스의 확인 결과
+## 전달 후보와 복구
 
-2026-10-10 build29은 단위 90개·격리 UI 13종·실제 Luna/high의 이미지 색상/파일 표식 읽기·패키지 소스/worker/아이콘 일치 검증을 수행했다. 사용 프로필/CLI/실제 호출 여부와 제한은 [첨부·대기열 적용 기록](ATTACHMENTS_AND_QUEUE_2026-10-10.md)을 따른다. 현재 정리 작업에서 이를 재실행했다고 표현하지 않는다.
-
-연결 복구·브라우저 URL/시도 ID·이미지 결과 복원은 [alpha.13 적용 기록](CONNECTION_AND_IMAGES_2026-10-08.md), 이전 결함 수정/실제 소유 턴 중단/측정은 [2026-10-08 수정 결과](history/ISSUE_REMEDIATION_RESULT_2026-10-08.md), 더 이전 alpha/build별 숫자와 전달 결과는 [이전 알파 보고서](history/ALPHA_REPORT.md)에 있다.
+검증 후보는 `dist/staging/OnggiBot-darwin-arm64/OnggiBot.app`이다. 일반 실행 경로의 alpha14/build30은 교체하지 않았다. 직전 alpha21/build37 전체 앱은 `artifacts/mac-followup-2026-10-15/baseline-app37.app`, alpha17/build33은 `dist/rollback-alpha17-build33/`에 유지한다. 더 이전 후보·원자료·복구 사본의 위치는 [검토 이력](history/README.md)과 각 결과 문서에 보존한다. 같은 staging 경로를 재사용하므로 검증 시각·source hash·ASAR를 함께 확인한다.
 
 ## 유지하는 제한
 
 - Windows/Intel·혼합 DPI·Snap·IME·실제 파일 잠금/설치와 macOS 물리 다중 모니터/절전/Spaces는 별도 실기 검증이 필요하다.
-- 실제 미로그인 계정의 브라우저 인증 콜백은 미검증이다. 모의 로그인 결과를 실제 인증 성공으로 표시하지 않는다.
+- 실제 미로그인 브라우저 인증 콜백·다른 제공자 실행·다른 앱과 클립보드 왕복·OS 배너 클릭/소리는 미검증이다. API 성공이나 fixture 결과로 대체하지 않는다.
+- 클립보드 복원 확인은 OS write 완료이며 원본 payload 재읽기 대조는 포함하지 않는다.
 - 로컬 read-only는 선택 폴더만 읽는다는 보장이 아니다. 범위는 CLI 권한 설정을 따른다. 추가 권한 프로필은 부여하지 않는다.
 - 라이브 부분 응답은 비정상 종료로 손실될 수 있다. JSON 저널 복구는 DB 트랜잭션/전원 장애 내구성 보장이 아니다.
-- 긴 기록/CLI 전체 기록은 메모리에서 읽고 표시만 분할한다. CPU 표본은 통제된 배터리·전체 시스템 측정이나 성능 향상 보장이 아니다.
-- staging은 로컬 ad-hoc 서명을 적용한다. Developer ID/공증·설치 프로그램·자동 업데이트는 제공하지 않는다. Slack·중앙 FIFO·음성/기억은 미착수다.
+- 전체 JSON 읽기/parse·복사·저장·검색과 이미지 중복 검증·첨부 전체 캐시 조사 비용이 남는다. 원격 기록의 전체 확장 시 페이지별 전체 저장으로 누적 I/O가 증가한다.
+- CPU 표본은 통제된 배터리·전체 시스템 측정이나 성능 향상 보장이 아니다.
+- 로컬 ad-hoc 서명은 Developer ID/공증·설치 프로그램·자동 업데이트를 대신하지 않는다. Slack·중앙 FIFO·음성/기억은 미착수다.
 
-구현과 남은 범위는 [TASKS](../TASKS.md), 재현 명령/패키징은 [BUILD_GUIDE](BUILD_GUIDE.md)를 따른다.
+실행할 후속 작업과 완료 조건은 [TASKS](../TASKS.md), 재현 명령과 패키징은 [BUILD_GUIDE](BUILD_GUIDE.md)를 따른다. 과거 버전별 검사 수·전달·실패 근거는 [정리 전 검증 보고서](history/ALPHA_REPORT_BEFORE_CLEANUP_2026-10-16.md)와 [검토 이력](history/README.md)에 보존한다.

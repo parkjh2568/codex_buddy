@@ -36,7 +36,7 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
   if(method==='turn/start'){
     const turnId='model-turn-'+(++sequence);
     const thread=threads.get(params.threadId);
-    const turn={id:turnId,status:'inProgress',startedAt:Date.now(),items:[{type:'userMessage',id:params.clientUserMessageId,content:params.input}]};thread.turns.push(turn);
+    const turn={id:turnId,status:'inProgress',startedAt:Date.now(),personaInstructions:params.collaborationMode?.settings.developer_instructions,items:[{type:'userMessage',id:params.clientUserMessageId,content:params.input}]};thread.turns.push(turn);
     send({id,result:{turn:{id:turnId}}});send({method:'turn/started',params:{threadId:params.threadId,turn:{id:turnId}}});
     deltaTimer=setTimeout(()=>send({method:'item/agentMessage/delta',params:{threadId:params.threadId,turnId,itemId:'item-'+turnId,delta:'응답 시작'}}),120);
     timer=setTimeout(()=>{

@@ -17,9 +17,9 @@ class PersonaLibrary{
         if(fs.existsSync(journal)){
           if(fs.lstatSync(journal).isSymbolicLink()||!fs.statSync(journal).isFile()||fs.statSync(journal).size>131072)throw Error('말투 생성 복구 파일을 확인해주세요.');
           const pending=JSON.parse(fs.readFileSync(journal,'utf8'));
-          if(pending.version!==1||!/^user-[a-f0-9-]{36}$/.test(pending.id)||typeof pending.text!=='string'||!pending.text.trim()||pending.text.includes('\u0000')||Buffer.byteLength(pending.text)>16384||!Array.isArray(pending.modes)||pending.modes.length>32||!pending.modes.some(e=>e.id===pending.id))throw Error('말투 생성 복구 데이터가 올바르지 않습니다.');
+          if(pending.version!==1||typeof pending.id!=='string'||!/^user-[a-f0-9-]{36}$/.test(pending.id)||typeof pending.text!=='string'||!pending.text.trim()||pending.text.includes('\u0000')||Buffer.byteLength(pending.text)>16384||!Array.isArray(pending.modes)||pending.modes.length>32||!pending.modes.some(e=>e.id===pending.id))throw Error('말투 생성 복구 데이터가 올바르지 않습니다.');
           const ids=new Set();
-          if(pending.modes.some(e=>!e||!/^user-[a-f0-9-]{36}$/.test(e.id)||ids.has(e.id)||(ids.add(e.id),false)||typeof e.name!=='string'||!e.name.trim()||Array.from(e.name.trim().normalize('NFC')).length>60||/[\u0000-\u001f\u007f-\u009f]/u.test(e.name)||typeof e.archived!=='boolean'))throw Error('말투 생성 복구 목록을 확인해주세요.');
+          if(pending.modes.some(e=>!e||typeof e.id!=='string'||!/^user-[a-f0-9-]{36}$/.test(e.id)||ids.has(e.id)||(ids.add(e.id),false)||typeof e.name!=='string'||!e.name.trim()||Array.from(e.name.trim().normalize('NFC')).length>60||/[\u0000-\u001f\u007f-\u009f]/u.test(e.name)||typeof e.archived!=='boolean'))throw Error('말투 생성 복구 목록을 확인해주세요.');
           if(pending.modes.filter(e=>!e.archived).length+pack.personas.filter(e=>e.id!=='base'&&!pending.modes.some(mode=>mode.id===e.id)).length>8)throw Error('말투 개수 한도를 확인해주세요.');
           const file=path.join(dir,pending.id+'.md');
           if(fs.existsSync(file)){if(fs.lstatSync(file).isSymbolicLink()||!fs.statSync(file).isFile()||fs.statSync(file).size>16384||fs.readFileSync(file,'utf8')!==pending.text)throw Error('생성 중인 말투 원본이 달라 복구를 중단했습니다.');}
@@ -32,7 +32,7 @@ class PersonaLibrary{
           if(parsed.version!==1||!Array.isArray(parsed.modes)||parsed.modes.length>32)throw Error('말투 목록 형식을 확인해주세요.');
           modes=parsed.modes;
           for(const entry of modes){
-            if(!entry||!/^user-[a-f0-9-]{36}$/.test(entry.id)||seen.has(entry.id)||typeof entry.name!=='string'||!entry.name.trim()||Array.from(entry.name.trim().normalize('NFC')).length>60||/[\u0000-\u001f\u007f-\u009f]/u.test(entry.name)||typeof entry.archived!=='boolean')throw Error('사용자 말투 목록을 확인해주세요.');
+            if(!entry||typeof entry.id!=='string'||!/^user-[a-f0-9-]{36}$/.test(entry.id)||seen.has(entry.id)||typeof entry.name!=='string'||!entry.name.trim()||Array.from(entry.name.trim().normalize('NFC')).length>60||/[\u0000-\u001f\u007f-\u009f]/u.test(entry.name)||typeof entry.archived!=='boolean')throw Error('사용자 말투 목록을 확인해주세요.');
             entry.name=entry.name.trim().normalize('NFC');seen.add(entry.id);
           }
           if(modes.filter(e=>!e.archived).length+pack.personas.filter(e=>e.id!=='base'&&!modes.some(mode=>mode.id===e.id)).length>8)throw Error('말투는 캐릭터당 최대 8개까지 사용할 수 있습니다.');

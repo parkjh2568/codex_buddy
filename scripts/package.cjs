@@ -25,7 +25,7 @@ const metadata = require('../package.json');
     appBundleId: 'local.onggibot.desktop',
     appCategoryType: 'public.app-category.productivity',
     appVersion: '0.1.0',
-    buildVersion: '32',
+    buildVersion: '38',
     ...(process.platform==='darwin'?{osxSign:{identity:'-',identityValidation:false,type:'development',preAutoEntitlements:false,preEmbedProvisioningProfile:false,optionsForFile:()=>({entitlements:['com.apple.security.cs.allow-jit'],hardenedRuntime:false})}}:{}),
     electronVersion: metadata.devDependencies.electron,
     prune: true,

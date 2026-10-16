@@ -15,6 +15,7 @@ const timer=setTimeout(()=>{console.error('PACKAGE_VERIFICATION_TIMEOUT');app.ex
 app.whenReady().then(async()=>{
   const result={at:new Date().toISOString(),archive,runtime:{electron:process.versions.electron,node:process.versions.node,arch:process.arch},hashes:{}};
   const files=['src/main.cjs','src/codex.cjs','src/models.cjs','src/preload.cjs','src/packs.cjs','src/personas.cjs','src/pack-library.cjs','src/asset-validator.cjs','src/connection-setup.cjs','src/response-images.cjs','src/attachments.cjs','src/skins.cjs','src/store.cjs','src/store-worker.cjs','src/ui/renderer.bundle.js','src/ui/renderer.bundle.js.LEGAL.txt','src/ui/index.html','src/ui/style.css','src/ui/notice.js','src/ui/notice.html','src/ui/validate-images.html','THIRD_PARTY_NOTICES.txt'];
+  files.push('src/storage-maintenance.cjs');
   const excluded=['README.md','TASKS.md','AGENTS.md','.gitignore','src/ui/renderer.mjs','assets/tray-source.png'];
   for(const folder of ['characters','skins','assets'])for(const entry of fs.readdirSync(path.join(root,folder),{recursive:true,withFileTypes:true}))if(entry.isFile()){const file=path.relative(root,path.join(entry.parentPath,entry.name));if(!excluded.includes(file.split(path.sep).join('/')))files.push(file);}
   for(const file of files){const source=fs.readFileSync(path.join(root,file)),packaged=fs.readFileSync(path.join(archive,file));assert.ok(source.equals(packaged),file+' bytes differ');result.hashes[file]=createHash('sha256').update(source).digest('hex');}
@@ -45,6 +46,11 @@ app.whenReady().then(async()=>{
     store.data.messages.push({id:'user-attachments',role:'user',text:'inspect',mode:'codex',status:'completed',attachments:imported});await store.saveAsync();await store.closeWorker();
     const restored=new Store(profile,{});assert.equal(restored.data.messages[0].images[0].id,image.id);assert.equal(restored.data.messages[1].attachments.length,2);assert.ok(!fs.readFileSync(path.join(store.historyDirectory,store.data.activeConversationId+'.json'),'utf8').includes(item.result));
     result.packagedAttachments={fileSnapshotPreserved:true,imageDecoded:true,count:imported.length,storeReloaded:true};
+    const {StorageMaintenance}=require(path.join(archive,'src/storage-maintenance.cjs')),maintenance=new StorageMaintenance(profile),orphan=Buffer.from('PACKAGED_STORAGE_RECOVERY'),orphanHash=createHash('sha256').update(orphan).digest('hex'),orphanFile=path.join(attachments.root,orphanHash+'.bin');
+    fs.writeFileSync(orphanFile,orphan,{flag:'wx',mode:0o600});const options={conversations:store.data.conversations,messages:store.data.messages},inspection=await maintenance.inspect(options),candidate=inspection.items.find(entry=>entry.name.endsWith(orphanHash+'.bin'));
+    assert.ok(candidate?.eligible);const moved=await maintenance.quarantine({token:inspection.token,ids:[candidate.id]},options,()=>true);assert.equal(moved.moved.length,1);assert.equal(fs.existsSync(orphanFile),false);
+    const recovered=await maintenance.restore(moved.batch,()=>true);assert.equal(recovered.restored.length,1);assert.ok(fs.readFileSync(orphanFile).equals(orphan));
+    result.packagedStorage={referencedCachePreserved:true,selectedOrphanQuarantined:true,restoreBytesPreserved:true,backupPreserved:recovered.backupPreserved};
     result.packagedImage={synthetic:!imageItems,width:image.width,height:image.height,bytes:image.bytes,originalId:image.id,previewId:image.previewId,previewWidth:bytes.readUInt32BE(16),previewHeight:bytes.readUInt32BE(20),originalBytesPreserved:true,storeReloaded:true};
   }finally{await store.closeWorker();fs.rmSync(profile,{recursive:true,force:true});}
   result.passed=true;fs.writeFileSync(path.join(output,'package-verification.json'),JSON.stringify(result,null,2));console.log('PACKAGE_RUNTIME_ASSETS_WORKER_ICON_AND_IMAGES_OK',files.length,result.projectVersion);app.quit();

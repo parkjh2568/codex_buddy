@@ -10,7 +10,7 @@
 
 JS 60개를 구문 분석해 정적 require/import 249개와 호출·주석을 확인하고, 동적 smoke 분기와 HTML/renderer/CSS 참조를 대조했다. 기본 팩의 미참조/누락 파일은 없고 현재 의존성도 각각 번들·빌드·검사에서 사용한다. CSS 클래스 이름만 검색해 삭제를 확정하지 않는다. 동적 motion 클래스와 notice 페이지, 실제 DOM 상태를 함께 본다.
 
-린트와 단위 검사 90개를 이번 계획의 기준으로 다시 실행해 통과했다. 최신 릴리스의 UI 13종·실제 첨부 입력·패키지 검증은 [build29 적용 기록](ATTACHMENTS_AND_QUEUE_2026-10-10.md)의 기존 근거다. 이번에는 GUI/유료 모델을 재실행하지 않았다.
+린트와 단위 검사 90개를 이번 계획의 기준으로 다시 실행해 통과했다. 최신 릴리스의 UI 13종·실제 첨부 입력·패키지 검증은 [build29 적용 기록](../ATTACHMENTS_AND_QUEUE_2026-10-10.md)의 기존 근거다. 이번에는 GUI/유료 모델을 재실행하지 않았다.
 
 검토 원자료는 `artifacts/cleanup-review-2026-10-10/`의 `source-inventory.json`, `resource-inventory.json`, `document-inventory.json`, `app-inventory.json`, `review-baseline.json`, `lint.txt`, `tests.txt`에 있다.
 

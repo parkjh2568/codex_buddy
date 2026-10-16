@@ -3,6 +3,7 @@ module.exports=async({pet,petNotice,panel,screen})=>{
   const original=pet.getBounds(),results=[];let moved=0,resized=0;
   const onMove=()=>moved++,onResize=()=>resized++;
   try{
+    const artifactRoot=path.resolve(process.env.ONGGI_SMOKE_ROOT??path.join(__dirname,'..','artifacts'));fs.mkdirSync(artifactRoot,{recursive:true});
     await pet.webContents.executeJavaScript(`window.onggi.action('settings',{reducedMotion:true})`);
     await new Promise(r=>setTimeout(r,120));
     const area=screen.getPrimaryDisplay().bounds;
@@ -29,7 +30,7 @@ module.exports=async({pet,petNotice,panel,screen})=>{
       results.push({bounds,notice:shown.noticeBounds,frames:samples.length,moved,resized});
     }
     pet.setBounds(original);await pet.webContents.executeJavaScript(`window.onggi.action('settings',{reducedMotion:false})`);
-    fs.writeFileSync(path.join(__dirname,'..','artifacts','pet-notice-smoke.json'),JSON.stringify({verifiedAt:new Date().toISOString(),platform:process.platform,status:'passed',results,noticeAccessRestricted:true},null,2));
+    fs.writeFileSync(path.join(artifactRoot,'pet-notice-smoke.json'),JSON.stringify({verifiedAt:new Date().toISOString(),platform:process.platform,status:'passed',results,noticeAccessRestricted:true},null,2));
     console.log('PET_NOTICE_FIXED_CHARACTER_FRAMES_OK',JSON.stringify(results));
   }finally{pet.off('move',onMove);pet.off('resize',onResize);}
 };

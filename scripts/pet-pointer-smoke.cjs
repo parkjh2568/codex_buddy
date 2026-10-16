@@ -2,6 +2,7 @@ const {BrowserWindow} = require('electron');
 const fs = require('node:fs');
 const path = require('node:path');
 module.exports = async ({app,pet,screen,petAnchor,getIgnoring}) => {
+  const artifactRoot=path.resolve(process.env.ONGGI_SMOKE_ROOT??path.join(__dirname,'..','artifacts'));fs.mkdirSync(artifactRoot,{recursive:true});
   const area = screen.getPrimaryDisplay().workArea;
   const x = Math.round(area.x + area.width / 2 - 220), y = area.y + 100;
   const underlay = new BrowserWindow({x,y,width:440,height:300,frame:false,resizable:false,title:'옹기봇 클릭 통과 검증',acceptFirstMouse:true,webPreferences:{nodeIntegration:false,contextIsolation:true,sandbox:true}});
@@ -23,7 +24,7 @@ module.exports = async ({app,pet,screen,petAnchor,getIgnoring}) => {
     if(click?.ignoring && click.relative.x>=0 && click.relative.x<18){
       clearInterval(timer);
       const result = {verifiedAt:new Date().toISOString(),status:'passed',click,initial,bounds};
-      fs.writeFileSync(path.join(__dirname,'..','artifacts','pet-native-pointer-smoke.json'),JSON.stringify(result,null,2));
+      fs.writeFileSync(path.join(artifactRoot,'pet-native-pointer-smoke.json'),JSON.stringify(result,null,2));
       console.log('PET_NATIVE_CLICK_THROUGH_OK',JSON.stringify(result));app.quit();
     }else if(Date.now()>deadline){clearInterval(timer);console.error('PET_NATIVE_VERIFICATION_TIMEOUT',JSON.stringify({click,initial,bounds}));app.exit(1);}
   },200);

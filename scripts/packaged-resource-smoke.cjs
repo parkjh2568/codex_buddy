@@ -9,6 +9,7 @@ process.argv.push('--demo');let running=false;
 app.on('browser-window-created',(_event,window)=>window.webContents.on('did-finish-load',()=>{
   const windows=BrowserWindow.getAllWindows(),pet=windows.find(w=>w.webContents.getURL().endsWith('?surface=pet')),panel=windows.find(w=>w.webContents.getURL().endsWith('?surface=panel'));
   if(running||!pet||!panel)return;running=true;
-  setTimeout(()=>void require('./resource-smoke.cjs')({app,pet,panel,store:{data:{messages:[]}},output:path.join(output,'resource-smoke.json')}),500);
+  const metadata=require(path.join(archive,'package.json'));
+  setTimeout(()=>void require('./resource-smoke.cjs')({app,pet,panel,store:{data:{messages:[]}},output:path.join(output,'resource-smoke.json'),projectVersion:metadata.onggiProjectVersion??metadata.version}),500);
 }));
 require(path.join(archive,'src/main.cjs'));

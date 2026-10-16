@@ -3,6 +3,7 @@ const path = require('node:path');
 module.exports = ({app,pet,petNotice,panel,store,codex,screen,publish,smoke,realSmoke}) => {
   setTimeout(async () => {
       try {
+        const artifactRoot=path.resolve(process.env.ONGGI_SMOKE_ROOT??path.join(__dirname,'..','artifacts'));fs.mkdirSync(artifactRoot,{recursive:true});
         if (smoke) {
           const petCheck = await pet.webContents.executeJavaScript(`(async()=>{
             const character=document.querySelector('#pet-character'),bubble=document.querySelector('#pet-bubble'),controls=document.querySelector('.pet-controls');
@@ -37,7 +38,7 @@ module.exports = ({app,pet,petNotice,panel,store,codex,screen,publish,smoke,real
           const moved = pet.getBounds();
           if(moved.x!==compact.x-40||moved.y!==compact.y-30)throw new Error('PET_ABSOLUTE_DRAG_FAILED '+JSON.stringify({compact,moved}));
           console.log('PET_COMPACT_ABSOLUTE_DRAG_OK',JSON.stringify({compact,moved}));
-          fs.writeFileSync(path.join(__dirname,'..','artifacts','pet-ui-smoke.json'),JSON.stringify({verifiedAt:new Date().toISOString(),status:'passed',result:petCheck},null,2));
+          fs.writeFileSync(path.join(artifactRoot,'pet-ui-smoke.json'),JSON.stringify({verifiedAt:new Date().toISOString(),status:'passed',result:petCheck},null,2));
           console.log('PET_HALF_SIZE_AUTO_HIDE_OK',JSON.stringify(petCheck));
           await require('../scripts/pet-notice-smoke.cjs')({pet,petNotice,panel,screen});
         }
@@ -59,21 +60,21 @@ module.exports = ({app,pet,petNotice,panel,store,codex,screen,publish,smoke,real
           do { await new Promise(r => setTimeout(r, 150)); } while (Date.now() < deadline && !document.querySelector('.message.assistant[data-status="completed"]') && !document.querySelector('.message.assistant[data-status="failed"]'));
           return { switched, text: document.querySelector('#messages').innerText, cards: document.querySelectorAll('.message').length, error: document.querySelector('#toast').textContent };
         })()`);
-        fs.mkdirSync(path.join(__dirname, '..', 'artifacts'), { recursive: true });
+
         if (realSmoke) {
           const deadline = Date.now() + 5000;
           while (Date.now() < deadline && !store.data.messages.find(m => m.role === 'assistant')?.timing?.renderedAt) await new Promise(r => setTimeout(r,30));
           const timing = store.data.messages.find(m => m.role === 'assistant')?.timing;
           if (!timing?.renderedAt || !(timing.firstReplyAt >= timing.cliSentAt && timing.completedAt >= timing.firstReplyAt)) throw new Error('Actual CLI response timing was not acknowledged');
-          fs.writeFileSync(path.join(__dirname,'..','artifacts','real-response-timing.json'),JSON.stringify({verifiedAt:new Date().toISOString(),model:'gpt-5.6-luna',effort:'high',serviceTier:'default',timing},null,2));
+          fs.writeFileSync(path.join(artifactRoot,'real-response-timing.json'),JSON.stringify({verifiedAt:new Date().toISOString(),model:'gpt-5.6-luna',effort:'high',serviceTier:'default',timing},null,2));
           if(process.argv.includes('--real-mini-smoke')){
             const mini=await panel.webContents.executeJavaScript(`({compact:document.body.classList.contains('compact-mode'),width:innerWidth,height:innerHeight,reply:document.querySelector('.message.assistant .message-body').textContent,composerVisible:document.querySelector('#composer').getBoundingClientRect().bottom<innerHeight})`);
             if(!mini.compact||mini.width!==360||!mini.composerVisible||store.data.messages.at(-1)?.persona?.id!=='concise')throw Error('Real mini/persona integration failed');
-            fs.writeFileSync(path.join(__dirname,'..','artifacts','real-mini-persona-smoke.json'),JSON.stringify({verifiedAt:new Date().toISOString(),status:'passed',model:'gpt-5.6-luna',effort:'high',mini,persona:store.data.messages.at(-1).persona},null,2));
+            fs.writeFileSync(path.join(artifactRoot,'real-mini-persona-smoke.json'),JSON.stringify({verifiedAt:new Date().toISOString(),status:'passed',model:'gpt-5.6-luna',effort:'high',mini,persona:store.data.messages.at(-1).persona},null,2));
           }
         }
-        fs.writeFileSync(path.join(__dirname, '..', 'artifacts', realSmoke ? 'alpha-real.png' : 'alpha-panel.png'), (await panel.webContents.capturePage()).toPNG());
-        fs.writeFileSync(path.join(__dirname, '..', 'artifacts', 'alpha-pet.png'), (await pet.webContents.capturePage()).toPNG());
+        fs.writeFileSync(path.join(artifactRoot,realSmoke ? 'alpha-real.png' : 'alpha-panel.png'), (await panel.webContents.capturePage()).toPNG());
+        fs.writeFileSync(path.join(artifactRoot,'alpha-pet.png'), (await pet.webContents.capturePage()).toPNG());
         if (!result.switched || !result.text.includes(realSmoke ? '옹기봇' : '체험 모드예요') || result.cards !== 2 || !store.data.messages.some(m => m.role === 'assistant' && m.status === 'completed')) throw new Error(JSON.stringify(result));
         if (!realSmoke) {
           const sample = '## Markdown 표시\n\n**굵게**와 *기울임*, `inline()`을 지원해요.\n\n**알파인 리눅스(Alpine Linux)**는 작은 배포판이에요.\n\n- 첫 번째\n- 두 번째\n\n> 작은 인용문\n\n| 기능 | 상태 |\n| --- | --- |\n| 표 | 완료 |\n\n```js\nconst onggi = "친구";\nconsole.log(onggi);\n```\n\n[공식 문서](https://learn.chatgpt.com/docs/app-server)\n\n<script>window.__onggiInjected = true</script>\n[나쁜 링크](javascript:alert(1))\n![외부 이미지](https://example.com/tracker.png)';
@@ -84,16 +85,16 @@ module.exports = ({app,pet,petNotice,panel,store,codex,screen,publish,smoke,real
           if (!(await panel.webContents.executeJavaScript(`[...document.querySelectorAll('.markdown-body strong')].some(e => e.textContent === '알파인 리눅스(Alpine Linux)')`))) throw new Error('KOREAN_EMPHASIS_FAILED');
           console.log('MARKDOWN_SECURITY_OK', JSON.stringify(markdownCheck));
           await require('../scripts/buddy-name-smoke.cjs')({pet,panel,store});
-          fs.writeFileSync(path.join(__dirname, '..', 'artifacts', 'alpha-markdown.png'), (await panel.webContents.capturePage()).toPNG());
+          fs.writeFileSync(path.join(artifactRoot,'alpha-markdown.png'), (await panel.webContents.capturePage()).toPNG());
           store.data.messages.find(m => m.role === 'assistant').text = '```js\nconst partial ='; publish();
           await new Promise(r => setTimeout(r, 100));
           if (!(await panel.webContents.executeJavaScript(`Boolean(document.querySelector('.markdown-body pre code')?.textContent.includes('const partial ='))`))) throw new Error('STREAMING_MARKDOWN_FAILED');
           await panel.webContents.executeJavaScript(`document.querySelector('[data-tab="settings"]').click()`);
           await new Promise(r => setTimeout(r, 100));
-          fs.writeFileSync(path.join(__dirname, '..', 'artifacts', 'alpha-settings.png'), (await panel.webContents.capturePage()).toPNG());
+          fs.writeFileSync(path.join(artifactRoot,'alpha-settings.png'), (await panel.webContents.capturePage()).toPNG());
           await panel.webContents.executeJavaScript(`document.querySelector('[data-tab="chat"]').click(); document.querySelector('#new-chat').click()`);
           await new Promise(r => setTimeout(r, 150));
-          fs.writeFileSync(path.join(__dirname, '..', 'artifacts', 'alpha-welcome.png'), (await panel.webContents.capturePage()).toPNG());
+          fs.writeFileSync(path.join(artifactRoot,'alpha-welcome.png'), (await panel.webContents.capturePage()).toPNG());
           const layout = await panel.webContents.executeJavaScript(`({ scroll: window.scrollY, shellScroll: document.querySelector('.panel-shell').scrollTop, headerTop: document.querySelector('.header').getBoundingClientRect().top })`);
           if (layout.headerTop < 0 || layout.scroll || layout.shellScroll) throw new Error('LAYOUT_CHECK_FAILED ' + JSON.stringify(layout));
           await require('../scripts/ui-layout-smoke.cjs')({panel});
@@ -118,7 +119,7 @@ module.exports = ({app,pet,petNotice,panel,store,codex,screen,publish,smoke,real
           if (!Object.values(queueCheck).every(Boolean)) throw new Error('QUEUE_CHECK_FAILED ' + JSON.stringify(queueCheck));
           console.log('QUEUE_AND_HOT_SWAP_OK', JSON.stringify(queueCheck));
         }
-        fs.writeFileSync(path.join(__dirname, '..', 'artifacts', realSmoke ? 'real-ui-smoke.json' : 'ui-smoke.json'), JSON.stringify({ verifiedAt: new Date().toISOString(), status: 'passed', result }, null, 2));
+        fs.writeFileSync(path.join(artifactRoot,realSmoke ? 'real-ui-smoke.json' : 'ui-smoke.json'), JSON.stringify({ verifiedAt: new Date().toISOString(), status: 'passed', result }, null, 2));
         console.log(realSmoke ? 'REAL_UI_SMOKE_OK' : 'SMOKE_OK', JSON.stringify(result)); app.quit();
       } catch (error) { console.error('SMOKE_FAILED', error); codex.stop(); app.exit(1); }
     }, 700);

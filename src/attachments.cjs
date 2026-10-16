@@ -1,4 +1,5 @@
 const fs=require('node:fs'),path=require('node:path'),{createHash,randomUUID}=require('node:crypto');
+const {setImmediate}=require('node:timers/promises');
 
 class AttachmentStore {
   constructor(directory,images){
@@ -35,9 +36,20 @@ class AttachmentStore {
         attachments.push({id,kind:'image',name,bytes:bytes.length,hash,extension:'.'+image.mime.split('/')[1],mime:image.mime,width:image.width,height:image.height,previewId:image.previewId});
       }else{
         let extension=path.extname(name).toLowerCase();if(!/^\.[a-z0-9]{1,16}$/.test(extension))extension='.bin';
-        if(fs.realpathSync(this.root)!==this.root)throw Error('첨부 폴더가 변경됐어요.');
+        const rootBefore=fs.lstatSync(this.root);
+        if(!rootBefore.isDirectory()||rootBefore.isSymbolicLink()||fs.realpathSync(this.root)!==this.root)throw Error('첨부 폴더가 변경됐어요.');
         const destination=path.join(this.root,hash+extension);let used=0;
-        for(const entry of fs.readdirSync(this.root,{withFileTypes:true})){const stat=fs.lstatSync(path.join(this.root,entry.name));if(!stat.isFile()||stat.isSymbolicLink())throw Error('첨부 폴더의 파일을 확인해주세요.');used+=stat.size;}
+        let checked=0;
+        for(const entry of fs.readdirSync(this.root,{withFileTypes:true})){
+          const stat=fs.lstatSync(path.join(this.root,entry.name));if(!stat.isFile()||stat.isSymbolicLink())throw Error('첨부 폴더의 파일을 확인해주세요.');used+=stat.size;
+          if(++checked%128===0){
+            await setImmediate();
+            const current=fs.lstatSync(this.root);
+            if(!current.isDirectory()||current.isSymbolicLink()||fs.realpathSync(this.root)!==this.root||['dev','ino','mtimeMs','ctimeMs'].some(key=>current[key]!==rootBefore[key]))throw Error('첨부 폴더가 변경됐어요. 다시 첨부해주세요.');
+          }
+        }
+        const rootAfter=fs.lstatSync(this.root);
+        if(!rootAfter.isDirectory()||rootAfter.isSymbolicLink()||fs.realpathSync(this.root)!==this.root||['dev','ino','mtimeMs','ctimeMs'].some(key=>rootAfter[key]!==rootBefore[key]))throw Error('첨부 폴더가 변경됐어요. 다시 첨부해주세요.');
         const attachment={id,kind:'file',name,bytes:bytes.length,hash,extension};
         if(fs.existsSync(destination))this.read(attachment);
         else{
@@ -52,9 +64,9 @@ class AttachmentStore {
   }
   read(attachment){
     if(this.error)throw Error(this.error);
-    if(!attachment||!/^[a-f0-9]{64}$/.test(attachment.hash)||!Number.isSafeInteger(attachment.bytes)||attachment.bytes<1||attachment.bytes>16*1024*1024)throw Error('첨부 정보를 확인해주세요.');
+    if(!attachment||typeof attachment.hash!=='string'||!/^[a-f0-9]{64}$/.test(attachment.hash)||!Number.isSafeInteger(attachment.bytes)||attachment.bytes<1||attachment.bytes>16*1024*1024)throw Error('첨부 정보를 확인해주세요.');
     if(attachment.kind==='image')return this.images.read({id:attachment.hash,mime:attachment.mime});
-    if(attachment.kind!=='file'||!/^\.[a-z0-9]{1,16}$/.test(attachment.extension)||fs.realpathSync(this.root)!==this.root)throw Error('첨부 경로를 확인해주세요.');
+    if(attachment.kind!=='file'||typeof attachment.extension!=='string'||!/^\.[a-z0-9]{1,16}$/.test(attachment.extension)||fs.realpathSync(this.root)!==this.root)throw Error('첨부 경로를 확인해주세요.');
     const file=path.join(this.root,attachment.hash+attachment.extension);if(fs.lstatSync(file).isSymbolicLink())throw Error('첨부 파일의 링크는 사용할 수 없어요.');
     const descriptor=fs.openSync(file,fs.constants.O_RDONLY|(fs.constants.O_NOFOLLOW??0));let bytes;
     try{const stat=fs.fstatSync(descriptor);if(!stat.isFile()||stat.size!==attachment.bytes)throw Error('첨부 사본이 변경됐어요. 다시 첨부해주세요.');const buffer=Buffer.alloc(attachment.bytes+1);let count=0;while(count<buffer.length){const read=fs.readSync(descriptor,buffer,count,buffer.length-count,null);if(!read)break;count+=read;}bytes=buffer.subarray(0,count);}finally{fs.closeSync(descriptor);}

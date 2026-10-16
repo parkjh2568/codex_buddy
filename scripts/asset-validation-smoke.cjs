@@ -2,11 +2,13 @@ const {app,BrowserWindow}=require('electron');
 const fs=require('node:fs'),path=require('node:path'),os=require('node:os');
 const {loadPack}=require('../src/packs.cjs');
 const {AssetValidator}=require('../src/asset-validator.cjs');
-app.setPath('userData',path.join(__dirname,'../artifacts/asset-validation-profile'));
+const artifactRoot=path.resolve(process.env.ONGGI_SMOKE_ROOT??path.join(__dirname,'../artifacts'));
+app.setPath('userData',path.join(artifactRoot,'asset-validation-profile'));
 app.whenReady().then(async()=>{
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'onggi-decode-')),validator=new AssetValidator();
   const window=new BrowserWindow({show:false,webPreferences:{sandbox:true,contextIsolation:true,nodeIntegration:false}});
   try{
+    fs.mkdirSync(artifactRoot,{recursive:true});
     await window.loadFile(path.join(__dirname,'../src/ui/validate-images.html'));
     const images=await window.webContents.executeJavaScript(`(()=>{const c=document.createElement('canvas');c.width=4;c.height=5;c.getContext('2d').fillRect(0,0,4,5);return{png:c.toDataURL('image/png'),webp:c.toDataURL('image/webp')}})()`);
     const results=[];
@@ -41,7 +43,7 @@ app.whenReady().then(async()=>{
     let inconsistent=false;try{await validator.validate(blink);}catch{inconsistent=true;}if(!inconsistent)throw Error('Inconsistent frame canvas was accepted');
     fs.writeFileSync(path.join(root,'idle.svg'),'<svg xmlns="http://www.w3.org/2000/svg"><path></svg>');fs.writeFileSync(path.join(root,'manifest.json'),JSON.stringify({schemaVersion:1,id:'decode',name:'Decode',states:{idle:'idle.svg'}}));
     let malformed=false;try{await validator.validate(loadPack(root));}catch{malformed=true;}if(!malformed)throw Error('Malformed SVG decoded');
-    fs.writeFileSync(path.join(__dirname,'../artifacts/asset-validation-smoke.json'),JSON.stringify({verifiedAt:new Date().toISOString(),status:'passed',results,corruptDecodeRejected:true,timeoutRejected:true,svgDecoded:true,blinkDecoded:true,inconsistentCanvasRejected:true,malformedSvgRejected:true,realModel:false},null,2));
+    fs.writeFileSync(path.join(artifactRoot,'asset-validation-smoke.json'),JSON.stringify({verifiedAt:new Date().toISOString(),status:'passed',results,corruptDecodeRejected:true,timeoutRejected:true,svgDecoded:true,blinkDecoded:true,inconsistentCanvasRejected:true,malformedSvgRejected:true,realModel:false},null,2));
     console.log('ASSET_FORMAT_DECODE_AND_TIMEOUT_OK');
   }finally{window.destroy();fs.rmSync(root,{recursive:true,force:true});}
   app.quit();
