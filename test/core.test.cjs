@@ -128,7 +128,7 @@ test('restart preserves completed history and marks pending work interrupted wit
 
 test('Codex JSONL framing, prompt integrity, approval and cancellation roundtrip', async t => {
   const bridge=new CodexConnection(); t.after(()=>bridge.stop());
-  const fixture=path.join(__dirname,'fixtures','fake-codex.cjs'); fs.chmodSync(fixture,0o755);
+  const fixture=path.join(__dirname,'fixtures','fake-codex.cjs');
   await bridge.connect(fixture,__dirname);
   assert.equal((await bridge.request('thread/start',{})).thread.id,'thread-test');
   const notifications=[], requests=[]; bridge.on('notification',m=>notifications.push(m)); bridge.on('request',m=>requests.push(m));

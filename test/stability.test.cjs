@@ -140,6 +140,57 @@ test('admission failure rolls back its IDs and the following reservation remains
   const results=await Promise.allSettled([h.call('send',{text:'failed'}),h.call('send',{text:'kept'})]);assert.equal(results[0].status,'rejected');assert.equal(results[1].status,'fulfilled');assert.equal(h.store.data.messages.length,2);assert.equal(h.store.data.messages[0].text,'kept');assert.equal(vm.runInContext('preparing',h.context),0);
 });
 
+test('renderer reload rejects an uncommitted send and does not run a send committed during reload',async t=>{
+  for(const boundary of ['prepare','commit']){
+    const h=mainHarness(t);
+    h.context.testPanel.renderGeneration=1;
+    h.context.testPersonas={resolve:()=>null};
+    vm.runInContext("personaLibrary=testPersonas;current={id:'held'};",h.context);
+    let release,ready;
+    const gate=new Promise(resolve=>{release=resolve;}),entered=new Promise(resolve=>{ready=resolve;});
+    const save=h.store.saveAsync.bind(h.store);
+    if(boundary==='prepare')h.store.saving=gate;
+    else {
+      let calls=0;
+      h.store.saveAsync=async()=>{await save();if(++calls===1){ready();await gate;}};
+    }
+    const submission=h.call('send',{text:'stale renderer'});
+    if(boundary==='prepare')await new Promise(resolve=>setImmediate(resolve));
+    else await entered;
+    h.context.testPanel.renderGeneration++;
+    if(boundary==='prepare')h.store.saving=null;
+    release();
+    await assert.rejects(submission,/접수 중/);
+    assert.equal(vm.runInContext('queue.length',h.context),0);
+    const messages=new Store(h.root,{}).data.messages;
+    assert.equal(messages.length,boundary==='prepare'?0:2);
+    if(boundary==='commit')assert.deepEqual(messages.map(message=>message.status),['interrupted','interrupted']);
+  }
+});
+
+test('stale renderer pack selection or validation cannot publish a preview token',async t=>{
+  for(const boundary of ['selection','validation']){
+    const h=mainHarness(t);
+    h.context.testPanel.renderGeneration=1;
+    const selection={canceled:false,filePaths:[path.join(__dirname,'../characters/onggi-sprout')]};
+    let release,notify;
+    const gate=new Promise(resolve=>{release=resolve;}),entered=new Promise(resolve=>{notify=resolve;});
+    if(boundary==='validation'){
+      h.electron.dialog.showOpenDialog=async()=>selection;
+      h.context.pauseValidation=async()=>{notify();await gate;};
+      vm.runInContext('assetValidator.validate=pauseValidation;',h.context);
+    }
+    const request=h.call('pack-preview',{});
+    if(boundary==='validation')await entered;
+    h.context.testPanel.renderGeneration++;
+    if(boundary==='selection')h.select(selection);
+    else release();
+    await assert.rejects(request,/창이 바뀌었습니다/);
+    assert.equal(vm.runInContext('packPreview',h.context),null);
+    assert.equal(vm.runInContext('packImporting',h.context),false);
+  }
+});
+
 test('model pagination has a total cap and preserves the previous catalog after malformed input', async () => {
   let calls=0;
   const catalog = new ModelCatalog({request:async()=>({data:[],nextCursor:'page-'+(++calls)})});
@@ -420,6 +471,31 @@ test('incremental history reveals stored blocks before requesting another remote
   h.store.data.messages=Array.from({length:150},(_,i)=>[{id:'u-'+i,turnId:'turn-'+i,role:'user',text:'question '+i,mode:'codex',status:'completed'},{id:'a-'+i,turnId:'turn-'+i,role:'assistant',text:'answer '+i,mode:'codex',status:'completed'}]).flat();h.store.save();const id=h.store.data.activeConversationId;let pages=0;
   h.context.readIncremental=async method=>method==='thread/read'?{thread:{id:'owned-thread'}}:{data:[{id:'turn-149',itemsView:'full',status:'completed',items:[{type:'userMessage',id:'u-149',content:[{type:'text',text:'question 149'}]},{type:'agentMessage',text:'answer 149'}]}],nextCursor:++pages===1?'older':null};vm.runInContext('codex.connect=async()=>true;codex.request=readIncremental;',h.context);
   await h.call('open-conversation',{id});assert.equal(pages,1);await h.call('load-older',{});assert.equal(h.context.testPanel.messageLimit,200);assert.equal(pages,1);await h.call('load-older',{});assert.equal(h.context.testPanel.messageLimit,300);assert.equal(pages,1);await h.call('load-older',{});assert.equal(pages,2);assert.equal(h.store.data.messages.length,300);
+});
+
+test('a large remote history page is stored exactly but displayed in bounded older batches',async t=>{
+  const h=mainHarness(t);h.store.data.settings.demo=false;h.store.data.threadId='owned-thread';
+  h.store.data.messages=[{id:'local',turnId:'latest',role:'user',text:'latest',mode:'codex',status:'completed',createdAt:4000}];
+  h.store.save();
+  const id=h.store.data.activeConversationId;
+  let pages=0;
+  h.context.readLargePage=async(method,params)=>{
+    if(method==='thread/read')return{thread:{id:'owned-thread'}};
+    pages++;
+    if(!params.cursor)return{data:[{id:'latest',itemsView:'full',status:'completed',items:[{type:'userMessage',id:'local',content:[{type:'text',text:'latest'}]}]}],nextCursor:'older'};
+    const data=Array.from({length:4},(_,i)=>({id:'old-turn-'+i,itemsView:'full',status:'completed',startedAt:3-i,items:[{type:'userMessage',id:'old-user-'+i,content:[{type:'text',text:'older '+i}]},{type:'agentMessage',text:'가'.repeat(65000)}]}));
+    return{data,nextCursor:null};
+  };
+  vm.runInContext('codex.connect=async()=>true;codex.request=readLargePage;',h.context);
+  await h.call('open-conversation',{id});
+  await h.call('load-older',{});
+  const messages=h.store.data.messages;
+  assert.equal(pages,2);assert.equal(messages.length,9);
+  assert.ok(h.context.testPanel.messageLimit>=2&&h.context.testPanel.messageLimit<messages.length);
+  const kept=h.context.testPanel.messageLimit;
+  await h.call('load-older',{});
+  assert.equal(pages,2);assert.ok(h.context.testPanel.messageLimit>kept);
+  assert.equal(new Store(h.root,{}).data.messages.length,messages.length);
 });
 
 test('partial remote history refuses ambiguous text-only legacy matches without losing local records',async t=>{
@@ -1109,4 +1185,27 @@ test('opening a composer or model popover survives initial simple-height and lat
     const left=Number.parseFloat(popup.style.left),top=Number.parseFloat(popup.style.top);assert.ok(left>=12&&left+popup.offsetWidth<=context.innerWidth-12);assert.ok(top>=12&&top+popup.offsetHeight<=context.innerHeight-12);assert.equal(protections,id==='composer-popover'?1:2);assert.equal(context.document.activeElement,focused);assert.equal(hidden,oldHidden);
     popup.open=false;
   }
+});
+
+test('remote incomplete turns retain completed local answers and mark newly truncated history', async t=>{
+  const h=mainHarness(t);
+  h.store.data.settings.demo=false;
+  h.store.data.threadId='owned-thread';
+  h.store.data.messages=[
+    {id:'local-user',turnId:'known',role:'user',text:'question',mode:'codex',status:'completed'},
+    {id:'local-reply',turnId:'known',role:'assistant',text:'local complete answer',mode:'codex',status:'completed'},
+  ];
+  h.store.save();
+  const id=h.store.data.activeConversationId;
+  h.context.readRegression=async method=>method==='thread/read'?{thread:{id:'owned-thread'}}:{nextCursor:null,data:[
+    {id:'fresh',status:'completed',itemsView:'full',items:[{type:'userMessage',content:[{type:'text',text:'new question'}]},{type:'agentMessage',text:'x'.repeat(100001)}]},
+    {id:'known',status:'inProgress',itemsView:'full',items:[{type:'agentMessage',text:'partial'}]},
+  ]};
+  vm.runInContext('codex.connect=async()=>true;codex.request=readRegression;',h.context);
+  await h.call('open-conversation',{id});
+  const restored=new Store(h.root,{}).data.messages;
+  assert.equal(restored[0].status,'completed');
+  assert.equal(restored[1].text,'local complete answer');
+  assert.equal(restored[3].text.length,100000);
+  assert.equal(restored[3].textTruncated,true);
 });

@@ -129,6 +129,16 @@ async function refreshModels(onlyIfStale = false) {
   finally { modelRefresh = null; }
 }
 
+function olderMessageCount(messages, visibleCount) {
+  let count=0,bytes=0;
+  for(let index=messages.length-visibleCount-1;index>=0&&count<100;index--){
+    const size=Buffer.byteLength(messages[index].text);
+    if(count&&bytes+size>256*1024)break;
+    bytes+=size;count++;
+  }
+  return count;
+}
+
 function publish(immediate = false) {
   if (!store || quitting) return;
   if (publishTimer) { if (!immediate) return; clearTimeout(publishTimer); }
@@ -208,11 +218,7 @@ function publish(immediate = false) {
       else {
         const reset=!window.messageView || window.messageView.conversationId!==state.activeConversationId;
         if (reset) {window.messageView={conversationId:state.activeConversationId,entries:new Map()};window.expandedHistory=false;}
-        if (!window.expandedHistory) {
-          let count=0,bytes=0;
-          for(let i=store.data.messages.length-1;i>=0&&count<100;i--){const size=Buffer.byteLength(store.data.messages[i].text);if(count&&bytes+size>256*1024)break;bytes+=size;count++;}
-          window.messageLimit=Math.max(1,count);
-        }
+        if (!window.expandedHistory) window.messageLimit=Math.max(1,olderMessageCount(store.data.messages,0));
         const visible=(window.compactMode?(simpleReply?[simpleReply]:[]):store.data.messages.slice(-(window.messageLimit??100))).map(message=>message.text.length>100000?{...message,text:message.text.slice(0,100000),displayTruncated:true}:message),entries=new Map(),upsert=[];
         for (const message of visible) {
           const metadata=JSON.stringify({...message,text:undefined}),previous=window.messageView.entries.get(message.id);
@@ -861,8 +867,7 @@ ipcMain.handle('action', async (event, action, payload = {}) => {
   if (action === 'load-older') {
     if(event.sender!==panel.webContents)throw new Error('대화창에서만 이전 내용을 불러올 수 있습니다.');
     if(historyLoading)throw Error('이전 내용을 불러오는 중입니다.');
-    let count=0,bytes=0;
-    for(let i=store.data.messages.length-(panel.messageLimit??100)-1;i>=0&&count<100;i--){const size=Buffer.byteLength(store.data.messages[i].text);if(count&&bytes+size>256*1024)break;bytes+=size;count++;}
+    const count=olderMessageCount(store.data.messages,panel.messageLimit??100);
     if(count){panel.messageLimit=(panel.messageLimit??100)+count;panel.expandedHistory=true;publish(true);return{ok:true};}
     if(!remoteHistory?.cursor)return{ok:true};
   }
@@ -1073,12 +1078,24 @@ ipcMain.handle('action', async (event, action, payload = {}) => {
             if(oldReply?.turnId&&oldReply.turnId!==turn.id)throw Error('Codex 답변과 사용자 기록의 연결이 일치하지 않습니다.');
             if(oldIndex>=0)previousIndex=oldIndex+1;
             if(!input&&!oldUser)continue;
-            const review=turn.items.findLast(item=>item.type==='exitedReviewMode'&&item.review.trim()),output=(review?.review??turn.items.filter(item=>['agentMessage','plan'].includes(item.type)).map(item=>item.text).join('\n\n')).slice(0,100000),status=turn.status==='completed'?'completed':turn.status==='failed'?'failed':'interrupted';
+            const review=turn.items.findLast(item=>item.type==='exitedReviewMode'&&item.review.trim());
+            const remoteText=review?.review??turn.items.filter(item=>['agentMessage','plan'].includes(item.type)).map(item=>item.text).join('\n\n');
+            const fullLocalReply=oldReply?.status==='completed'&&!oldReply.textTruncated&&oldReply.text;
+            const retainLocal=oldReply?.status==='completed'&&(turn.status!=='completed'||
+              fullLocalReply&&(!remoteText||remoteText.length>100000||oldReply.text.length>remoteText.length&&oldReply.text.startsWith(remoteText)));
+            const output=retainLocal?oldReply.text:remoteText.slice(0,100000);
+            const status=retainLocal||turn.status==='completed'?'completed':turn.status==='failed'?'failed':'interrupted';
             const timestamp=Number.isFinite(turn.startedAt)&&turn.startedAt>=0?(turn.startedAt<1e12?turn.startedAt*1000:turn.startedAt):null,images=[];
-            for(const item of turn.items){if(images.length>=8)break;if(item.type==='imageGeneration'||item.type==='mcpToolCall'&&Array.isArray(item.result?.content)&&item.result.content.some(content=>content?.type==='image'))images.push(...await responseImages.capture(item,{workspace,threadId:selected.threadId}));}
+            for(const item of retainLocal?[]:turn.items){if(images.length>=8)break;if(item.type==='imageGeneration'||item.type==='mcpToolCall'&&Array.isArray(item.result?.content)&&item.result.content.some(content=>content?.type==='image'))images.push(...await responseImages.capture(item,{workspace,threadId:selected.threadId}));}
             if(operation.canceled||quitting||panel!==owner||owner.isDestroyed()||event.sender.isDestroyed()||event.senderFrame!==event.sender.mainFrame||event.sender.mainFrame.detached||operation.generation!==owner.renderGeneration||connectionProcess!==codex.process||workspace!==store.data.settings.workspace||executable!==store.data.settings.codexPath||systemSuspended||screenLocked||store.data.activeConversationId!==selected.id||store.data.messages!==previous||store.pendingDeletion?.ids.includes(selected.id))throw Error('기록 조회 중 대화나 연결이 바뀌었습니다.');
             const user={...oldUser,id:oldUser?.id??`${turn.id}:user`,turnId:turn.id,role:'user',text:oldUser?.text??input,mode:'codex',status,createdAt:oldUser?.createdAt??timestamp??selected.createdAt},block=[user];
-            if(output||oldReply||images.length)block.push({...oldReply,id:oldReply?.id??`${turn.id}:reply`,turnId:turn.id,role:'assistant',text:output||oldReply?.text||'',...(images.length?{images:images.slice(0,8)}:{}),mode:'codex',status,createdAt:oldReply?.createdAt??user.createdAt});
+            if(output||oldReply||images.length){
+              const mergedImages=new Map((oldReply?.images??[]).map(image=>[image.itemId,image]));
+              for(const image of images)if(image.status==='ready'||mergedImages.get(image.itemId)?.status!=='ready')mergedImages.set(image.itemId,image);
+              block.push({...oldReply,id:oldReply?.id??`${turn.id}:reply`,turnId:turn.id,role:'assistant',
+                text:output||oldReply?.text||'',textTruncated:(!retainLocal&&remoteText?remoteText.length>100000:oldReply?.textTruncated)||undefined,
+                ...(mergedImages.size?{images:[...mergedImages.values()].slice(0,8)}:{}),mode:'codex',status,createdAt:oldReply?.createdAt??user.createdAt});
+            }
             for(const message of block)recordBytes+=Buffer.byteLength(JSON.stringify(message))+1;
             if(recordBytes>32*1024*1024)throw Error('병합 기록이 저장 용량을 초과합니다. 저장된 기록을 유지합니다.');
             records.push({oldIndex,block,timestamp});
@@ -1113,7 +1130,14 @@ ipcMain.handle('action', async (event, action, payload = {}) => {
           if(!operation.canceled&&!quitting&&panel===owner&&!owner.isDestroyed()&&!event.sender.isDestroyed()&&event.senderFrame===event.sender.mainFrame&&!event.sender.mainFrame.detached&&operation.generation===owner.renderGeneration&&connectionProcess===codex.process&&workspace===store.data.settings.workspace&&executable===store.data.settings.codexPath&&!systemSuspended&&!screenLocked&&store.data.activeConversationId===selected.id&&!store.pendingDeletion?.ids.includes(selected.id)){
             for(const turn of turns)seenTurns.add(turn.id);if(nextCursor)seenCursors.add(nextCursor);
             remoteHistory=paging?{conversationId:selected.id,process:connectionProcess,generation:operation.generation,cursor:nextCursor,seenCursors,seenTurns,oldestMessageId:records[0]?.block[0].id??continuation?.oldestMessageId??null}:null;
-            if(!opening){panel.messageLimit=messages.length;panel.expandedHistory=true;}
+            if(!opening){
+              const previousLimit=Math.min(previous.length,panel.messageLimit??100);
+              const firstVisibleId=previous.at(-previousLimit)?.id;
+              const firstVisibleIndex=messages.findIndex(message=>message.id===firstVisibleId);
+              const visibleCount=firstVisibleIndex<0?previousLimit:messages.length-firstVisibleIndex;
+              panel.messageLimit=Math.max(1,visibleCount+olderMessageCount(messages,visibleCount));
+              panel.expandedHistory=true;
+            }
           }
           connectionState='connected';
         }catch(error){historyWarning=store.writeBlocked?`원격 기록 병합을 확정하지 못했습니다. 현재 화면·원본·저널을 보존합니다: ${error.message}`:`저장된 기록을 표시합니다. Codex 기록 확인: ${error.message}`;}
@@ -1294,16 +1318,20 @@ ipcMain.handle('action', async (event, action, payload = {}) => {
       let source;
       if(payload.archiveToken){if(!packArchiveCatalog.some(e=>e.token===payload.archiveToken))throw Error('보관한 팩을 찾을 수 없습니다.');source=path.join(packLibrary.directory,payload.archiveToken);}
       else{const selection=await dialog.showOpenDialog(panel,{title:'캐릭터 폴더 미리보기',properties:['openDirectory']});if(selection.canceled)return{ok:true,canceled:true};source=selection.filePaths[0];}
+      if(quitting||panel!==owner||owner.isDestroyed()||requestGeneration!==owner.renderGeneration||event.senderFrame!==event.sender.mainFrame||event.sender.mainFrame.detached)
+        throw Error('캐릭터 팩을 준비하던 창이 바뀌었습니다. 다시 선택해주세요.');
       const loaded=loadPack(source);await assetValidator.validate(loaded);
+      if(quitting||panel!==owner||owner.isDestroyed()||requestGeneration!==owner.renderGeneration||event.senderFrame!==event.sender.mainFrame||event.sender.mainFrame.detached)
+        throw Error('캐릭터 팩을 준비하던 창이 바뀌었습니다. 다시 선택해주세요.');
       const installed=packs.find(p=>!p.temporary&&p.manifest.id===loaded.manifest.id);
       if(installed?.builtin)throw Error('기본 캐릭터는 덮어쓸 수 없습니다. 다른 ID로 가져와주세요.');
-      packPreview={token:randomUUID(),pack:loaded,expiresAt:Date.now()+600000};
+      packPreview={token:randomUUID(),pack:loaded,expiresAt:Date.now()+600000,generation:requestGeneration};
       return{ok:true,token:packPreview.token,pack:{...loaded.manifest,thumbnail:loaded.thumbnail,errorThumbnail:loaded.errorThumbnail,hasPoster:loaded.hasPoster},installedVersion:installed?.manifest.version??null};
     }finally{packImporting=false;}
   }
   if(action==='pack-apply'||action==='pack-remove'){
     if(owner!==panel||packImporting||store.writeBlocked||store.saving||current||queue.length||preparing||historyLoading||modelRefresh)throw Error('진행 중인 작업을 마친 뒤 캐릭터를 변경해주세요.');
-    const selected=action==='pack-remove'?packs.find(p=>p.manifest.id===payload.id):packPreview?.token===payload.token&&packPreview.expiresAt>Date.now()?packPreview.pack:null;
+    const selected=action==='pack-remove'?packs.find(p=>p.manifest.id===payload.id):packPreview?.token===payload.token&&packPreview.generation===requestGeneration&&packPreview.expiresAt>Date.now()?packPreview.pack:null;
     if(!selected)throw Error('미리보기나 캐릭터를 다시 선택해주세요.');
     const installed=packs.find(p=>!p.temporary&&p.manifest.id===selected.manifest.id);
     if(installed?.builtin||action==='pack-remove'&&(!installed||payload.confirmed!==true))throw Error('사용자 팩을 선택해 제거 범위를 확인해주세요.');
@@ -1443,7 +1471,7 @@ ipcMain.handle('action', async (event, action, payload = {}) => {
     const attachments=attachmentIds.map(id=>{const record=pendingAttachments.get(id);if(!record||record.editingJobId||record.conversationId!==store.data.activeConversationId||reservedAttachments.has(id))throw Error('이 대화에 선택한 첨부를 확인해주세요.');return record.attachment;});
     if(attachments.reduce((sum,a)=>sum+a.bytes,0)>32*1024*1024)throw Error('첨부 합계는 32MiB까지 가능해요.');
     if(queue.length+preparing>=10)throw Error('대기 요청은 최대 10개입니다.');
-    const settings={...store.data.settings},messages=store.data.messages,text=payload.text.trim()?payload.text:'첨부한 자료를 확인해주세요.',id=randomUUID(),replyId=randomUUID();
+    const settings={...store.data.settings},messages=store.data.messages,conversationId=store.data.activeConversationId,text=payload.text.trim()?payload.text:'첨부한 자료를 확인해주세요.',id=randomUUID(),replyId=randomUUID();
     const purpose=payload.purpose??'conversation';if(!['conversation','summary','analyze','plan','review'].includes(purpose))throw Error('작업 목적을 확인해주세요.');
     const skill=payload.skillToken?skillsWorkspace===settings.workspace?skillsCatalog.find(item=>item.token===payload.skillToken):null:null;
     if(payload.skillToken&&!skill)throw Error('스킬 목록을 새로 확인하고 선택해주세요.');
@@ -1457,7 +1485,7 @@ ipcMain.handle('action', async (event, action, payload = {}) => {
       while(store.saving)await store.saving;
       if(mode==='codex')await refreshModels(true);
       while(store.saving)await store.saving;
-      if(quitting||systemSuspended||screenLocked||packImporting||historyLoading||store.writeBlocked||messages!==store.data.messages||settings.workspace!==store.data.settings.workspace||settings.codexPath!==store.data.settings.codexPath||owner.isDestroyed()||event.senderFrame!==event.sender.mainFrame||store.pendingDeletion?.ids.includes(store.data.activeConversationId))throw Error('접수 중 대화 상태가 바뀌었습니다. 질문은 실행하지 않았습니다.');
+      if(quitting||systemSuspended||screenLocked||packImporting||historyLoading||store.writeBlocked||messages!==store.data.messages||conversationId!=null&&conversationId!==store.data.activeConversationId||settings.workspace!==store.data.settings.workspace||settings.codexPath!==store.data.settings.codexPath||owner.isDestroyed()||requestGeneration!==owner.renderGeneration||event.senderFrame!==event.sender.mainFrame||event.sender.mainFrame.detached||store.pendingDeletion?.ids.includes(conversationId))throw Error('접수 중 대화 상태가 바뀌었습니다. 질문은 실행하지 않았습니다.');
       const selection=mode==='demo'?{model:null,effort:null,modelName:'체험'}:modelCatalog.resolve(settings.model,settings.effort,settings.serviceTier);
       const pendingReplies = store.data.messages.filter(m => m.role === 'assistant' && ['queued','running'].includes(m.status)).length;
       let storedBytes = 2;
@@ -1475,7 +1503,7 @@ ipcMain.handle('action', async (event, action, payload = {}) => {
       remoteHistory=null;messages.push({id,role:'user',text,status:'queued',createdAt:Date.now(),mode,...selection,purpose,...(skillMetadata?{skill:skillMetadata}:{}),...(attachments.length?{attachments}:{})},{id:replyId,role:'assistant',text:'',status:'queued',createdAt:Date.now(),mode,...selection,purpose,persona:personaMetadata,...(skillMetadata?{skill:skillMetadata}:{}),...(timing?{timing}:{})});
       try{await store.saveAsync();}catch(error){if(!store.writeBlocked){for(let i=messages.length-1;i>=0;i--)if(messages[i].id===id||messages[i].id===replyId)messages.splice(i,1);}else for(const message of messages)if([id,replyId].includes(message.id))message.status='interrupted';publish(true);throw error;}
       for(const record of pendingAttachments.values())if(record.conversationId===null)record.conversationId=store.data.activeConversationId;
-      if(quitting||systemSuspended||screenLocked||[...queuePauses].some(reason=>reason!=='manual')&&queue.length||store.writeBlocked||owner.isDestroyed()||event.senderFrame!==event.sender.mainFrame){
+      if(quitting||systemSuspended||screenLocked||[...queuePauses].some(reason=>reason!=='manual')&&queue.length||store.writeBlocked||owner.isDestroyed()||requestGeneration!==owner.renderGeneration||event.senderFrame!==event.sender.mainFrame||event.sender.mainFrame.detached){
         for(const message of messages)if([id,replyId].includes(message.id)){message.status='interrupted';if(message.role==='assistant')message.error='접수 중 중단되어 실행하지 않았습니다.';}
         try{await store.saveAsync();}catch(error){store.writeBlocked=true;store.warning=error.message;}
         throw Error('접수 중 중단되어 질문을 실행하지 않았습니다.');
