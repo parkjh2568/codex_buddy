@@ -1,5 +1,6 @@
 const fs=require('node:fs'),path=require('node:path'),os=require('node:os');
-const {createHash,randomUUID}=require('node:crypto');
+const {createHash}=require('node:crypto');
+const {readBoundedFile,publishCacheFiles}=require('./cache-files.cjs');
 
 class ResponseImages {
   constructor(directory,validator){
@@ -27,9 +28,10 @@ class ResponseImages {
             const generated=path.join(process.env.CODEX_HOME??path.join(os.homedir(),'.codex'),'generated_images',threadId);
             if(fs.existsSync(generated))roots.push(fs.realpathSync(generated));
           }
-          if(fs.lstatSync(input.savedPath).isSymbolicLink()||!roots.some(root=>file.startsWith(root+path.sep)))throw Error('이미지 저장 경로가 이 대화의 소유 범위 밖에 있어요.');
-          const descriptor=fs.openSync(file,fs.constants.O_RDONLY|(fs.constants.O_NOFOLLOW??0));
-          try{const stat=fs.fstatSync(descriptor);if(!stat.isFile()||stat.size>16*1024*1024)throw Error('이미지 파일 크기를 확인해주세요.');const buffer=Buffer.alloc(stat.size+1);let count=0;while(count<buffer.length){const read=fs.readSync(descriptor,buffer,count,buffer.length-count,null);if(!read)break;count+=read;}if(count!==stat.size)throw Error('이미지 파일이 변경됐어요.');bytes=buffer.subarray(0,count);}finally{fs.closeSync(descriptor);}
+          const observed=fs.lstatSync(input.savedPath);
+          if(!observed.isFile()||!roots.some(root=>file.startsWith(root+path.sep)))throw Error('이미지 저장 경로가 이 대화의 소유 범위 밖에 있어요.');
+          bytes=readBoundedFile(file,{limit:16*1024*1024,observed,changed:'이미지 파일이 변경됐어요.',oversized:'이미지 파일 크기를 확인해주세요.'});
+          if(fs.realpathSync(input.savedPath)!==file)throw Error('이미지 파일이 변경됐어요.');
         }
         if(!bytes.length||bytes.length>16*1024*1024)throw Error('응답 이미지는 최대 16MiB까지 표시할 수 있어요.');
         let mime,width,height;
@@ -59,25 +61,15 @@ class ResponseImages {
         await this.validator.validate(candidate,10000,{maxDimension:4096,maxPixels:16777216,thumbnailSize:512});
         if(candidate.decodedImages){width=candidate.decodedImages[0].width;height=candidate.decodedImages[0].height;}
         const preview=Buffer.from(candidate.thumbnail.split(',')[1],'base64'),previewId=createHash('sha256').update(preview).digest('hex');
-        const previous=this.saveWork;let release;
-        const work=new Promise(resolve=>{release=resolve;});this.saveWork=work;
-        await previous;
+        const pending=new Map();
+        for(const [key,type,content]of [[id,mime,bytes],[previewId,'image/png',preview]]){
+          const file=path.join(this.root,key+'.'+type.split('/')[1]);
+          pending.set(file,{bytes:content,verify:()=>this.read({id:key,mime:type})});
+        }
+        let publication;
         try{
-          if(fs.realpathSync(this.root)!==this.root)throw Error('응답 이미지 폴더가 변경됐어요.');
-          let used=0;
-          for(const entry of fs.readdirSync(this.root,{withFileTypes:true})){const stat=fs.lstatSync(path.join(this.root,entry.name));if(!stat.isFile()||stat.isSymbolicLink())throw Error('응답 이미지 폴더의 파일을 확인해주세요.');used+=stat.size;}
-          const pending=new Map();
-          for(const [key,type,content]of [[id,mime,bytes],[previewId,'image/png',preview]]){
-            const file=path.join(this.root,key+'.'+type.split('/')[1]);
-            if(fs.existsSync(file)){this.read({id:key,mime:type});continue;}
-            pending.set(file,{key,type,content});
-          }
-          if(pending.size&&used+[...pending.values()].reduce((sum,entry)=>sum+entry.content.length,0)>512*1024*1024)throw Error('응답 이미지 저장 공간이 512MiB 한도에 도달했어요.');
-          for(const [file,{key,type,content}]of pending){
-            const temporary=file+'.tmp-'+randomUUID();
-            try{await fs.promises.writeFile(temporary,content,{flag:'wx',mode:0o600});if(fs.realpathSync(this.root)!==this.root)throw Error('응답 이미지 폴더가 변경됐어요.');try{fs.linkSync(temporary,file);}catch(error){if(error.code!=='EEXIST')throw error;this.read({id:key,mime:type});}}finally{fs.rmSync(temporary,{force:true});}
-          }
-        }finally{release();if(this.saveWork===work)this.saveWork=null;}
+          await publishCacheFiles(this.root,pending,{label:'응답 이미지',onStart:work=>{publication=work;this.saveWork=work;}});
+        }finally{if(this.saveWork===publication)this.saveWork=null;}
         images.push({itemId:input.itemId,status:'ready',id,previewId,mime,width,height,bytes:bytes.length});
       }catch(error){const message=typeof error?.message==='string'?error.message:'';images.push({itemId:input.itemId,status:'failed',error:/^(응답|이미지|PNG)/.test(message)?message:'이미지를 읽거나 저장하지 못했어요. 원본 결과는 CLI 기록에 남아 있어요.'});}
     }
@@ -86,9 +78,8 @@ class ResponseImages {
   read({id,mime}){
     if(this.error)throw Error(this.error);
     if(typeof id!=='string'||!/^[a-f0-9]{64}$/.test(id)||!['image/png','image/jpeg','image/webp'].includes(mime)||fs.realpathSync(this.root)!==this.root)throw Error('표시할 이미지 정보를 확인해주세요.');
-    const file=path.join(this.root,id+'.'+mime.split('/')[1]);if(fs.lstatSync(file).isSymbolicLink())throw Error('이미지 파일의 링크는 사용할 수 없습니다.');
-    const descriptor=fs.openSync(file,fs.constants.O_RDONLY|(fs.constants.O_NOFOLLOW??0));let bytes;
-    try{const stat=fs.fstatSync(descriptor);if(!stat.isFile()||stat.size>16*1024*1024)throw Error('이미지 파일 크기를 확인해주세요.');const buffer=Buffer.alloc(stat.size+1);let count=0;while(count<buffer.length){const read=fs.readSync(descriptor,buffer,count,buffer.length-count,null);if(!read)break;count+=read;}if(count!==stat.size)throw Error('저장 이미지가 변경됐어요.');bytes=buffer.subarray(0,count);}finally{fs.closeSync(descriptor);}
+    const file=path.join(this.root,id+'.'+mime.split('/')[1]);
+    const bytes=readBoundedFile(file,{limit:16*1024*1024,changed:'저장 이미지가 변경됐어요.',oversized:'이미지 파일 크기를 확인해주세요.'});
     if(bytes.length>16*1024*1024||createHash('sha256').update(bytes).digest('hex')!==id)throw Error('저장 이미지가 변경됐어요. 대화를 다시 열어 원본을 확인해주세요.');
     if(!(mime==='image/png'&&bytes.length>=33&&bytes.subarray(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10]))&&bytes.toString('ascii',12,16)==='IHDR'||mime==='image/jpeg'&&bytes[0]===255&&bytes[1]===216&&bytes[2]===255||mime==='image/webp'&&bytes.length>=20&&bytes.toString('ascii',0,4)==='RIFF'&&bytes.toString('ascii',8,12)==='WEBP'))throw Error('저장 이미지의 형식이 올바르지 않아요.');
     return{file,bytes};

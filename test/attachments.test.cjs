@@ -89,3 +89,38 @@ test('chunked attachment quotas accept the exact limit, reject overflow and stil
   await assert.rejects(library.import([{name:'overflow.txt',bytes:Buffer.from('x')}]),/512MiB/);
   const [duplicate]=await library.import([{name:'same.txt',bytes:Buffer.from('keep')}]);assert.equal(duplicate.hash,first.hash);assert.equal(fs.readdirSync(library.root).length,258);assert.equal(fs.statSync(orphan).size,512*1024*1024-4);
 });
+
+test('one batch rechecks existing file metadata once and rejects changes after staging',async t=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'onggi-batch-check-'));
+  t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+  const library=new AttachmentStore(path.join(root,'attachments'),{});
+  const originals=Array.from({length:160},(_,i)=>path.join(library.root,'orphan-'+i));
+  for(const file of originals)fs.writeFileSync(file,'original');
+  const stat=fs.lstatSync;let checks=0;
+  const count=t.mock.method(fs,'lstatSync',(file,...args)=>{
+    if(String(file).startsWith(path.join(library.root,'orphan-')))checks++;
+    return stat(file,...args);
+  });
+  const contents=Array.from({length:8},(_,i)=>({name:i+'.txt',bytes:Buffer.from('batch '+i)}));
+  await library.import(contents);
+  assert.equal(checks,originals.length*2);
+  count.mock.restore();
+
+  const open=fs.promises.open;let mutated=false;
+  t.mock.method(fs.promises,'open',async(file,...args)=>{
+    const handle=await open(file,...args);
+    if(args[0]==='wx'&&String(file).includes('.tmp-')&&!mutated){
+      const write=handle.writeFile.bind(handle);
+      handle.writeFile=async(...data)=>{
+        await write(...data);
+        fs.writeFileSync(originals[0],'modified');
+        mutated=true;
+      };
+    }
+    return handle;
+  });
+  await assert.rejects(library.import([{name:'new.txt',bytes:Buffer.from('separate')}]),/변경/);
+  assert.equal(mutated,true);
+  assert.equal(fs.readFileSync(originals[0],'utf8'),'modified');
+  assert.equal(fs.readdirSync(library.root).length,originals.length+contents.length);
+});

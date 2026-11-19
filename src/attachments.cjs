@@ -1,5 +1,5 @@
 const fs=require('node:fs'),path=require('node:path'),{createHash,randomUUID}=require('node:crypto');
-const {setImmediate}=require('node:timers/promises');
+const {openFlags,sameFile,readBoundedFile,publishCacheFiles}=require('./cache-files.cjs');
 
 class AttachmentStore {
   constructor(directory,images){
@@ -9,7 +9,7 @@ class AttachmentStore {
   async import(files,{imagesOnly=false}={}){
     if(this.error)throw Error(this.error);
     if(!Array.isArray(files)||!files.length||files.length>8)throw Error('첨부는 한 번에 최대 8개까지 선택해주세요.');
-    const attachments=[];let total=0;
+    const attachments=[],pending=new Map();let total=0;
     for(const file of files){
       const memory=file&&typeof file==='object'&&!Array.isArray(file);
       if(memory){if(Object.keys(file).some(key=>!['name','bytes'].includes(key))||typeof file.name!=='string'||!Buffer.isBuffer(file.bytes))throw Error('첨부 데이터를 확인해주세요.');}
@@ -20,12 +20,21 @@ class AttachmentStore {
         if(file.bytes.length<1||file.bytes.length>16*1024*1024||total+file.bytes.length>32*1024*1024)throw Error('파일은 각각 16MiB, 첨부 합계는 32MiB까지 가능해요.');
         bytes=Buffer.from(file.bytes);total+=bytes.length;
       }else{
-        const handle=await fs.promises.open(file,fs.constants.O_RDONLY|(fs.constants.O_NOFOLLOW??0));
+        const changed='선택한 파일이 변경됐어요. 다시 첨부해주세요.';
+        const before=await fs.promises.lstat(file);
+        if(!before.isFile())throw Error(changed);
+        if(before.size<1||before.size>16*1024*1024||total+before.size>32*1024*1024)throw Error('파일은 각각 16MiB, 첨부 합계는 32MiB까지 가능해요.');
+        const handle=await fs.promises.open(file,openFlags);
         try{
-          const before=await handle.stat();if(!before.isFile()||before.size<1||before.size>16*1024*1024||total+before.size>32*1024*1024)throw Error('파일은 각각 16MiB, 첨부 합계는 32MiB까지 가능해요.');
+          if(!sameFile(before,await handle.stat()))throw Error(changed);
           const buffer=Buffer.alloc(before.size+1);let count=0;
-          while(count<buffer.length){const read=await handle.read(buffer,count,buffer.length-count,null);if(!read.bytesRead)break;count+=read.bytesRead;}
-          const after=await handle.stat();if(count!==before.size||after.size!==before.size||after.mtimeMs!==before.mtimeMs||after.ctimeMs!==before.ctimeMs)throw Error('선택한 파일이 변경됐어요. 다시 첨부해주세요.');bytes=buffer.subarray(0,count);total+=count;
+          while(count<buffer.length){
+            const {bytesRead}=await handle.read(buffer,count,Math.min(buffer.length-count,65536),null);
+            if(!bytesRead)break;
+            count+=bytesRead;
+          }
+          if(count!==before.size||!sameFile(before,await handle.stat())||!sameFile(before,await fs.promises.lstat(file)))throw Error(changed);
+          bytes=buffer.subarray(0,count);total+=count;
         }finally{await handle.close();}
       }
       const id=randomUUID(),hash=createHash('sha256').update(bytes).digest('hex');
@@ -36,30 +45,13 @@ class AttachmentStore {
         attachments.push({id,kind:'image',name,bytes:bytes.length,hash,extension:'.'+image.mime.split('/')[1],mime:image.mime,width:image.width,height:image.height,previewId:image.previewId});
       }else{
         let extension=path.extname(name).toLowerCase();if(!/^\.[a-z0-9]{1,16}$/.test(extension))extension='.bin';
-        const rootBefore=fs.lstatSync(this.root);
-        if(!rootBefore.isDirectory()||rootBefore.isSymbolicLink()||fs.realpathSync(this.root)!==this.root)throw Error('첨부 폴더가 변경됐어요.');
-        const destination=path.join(this.root,hash+extension);let used=0;
-        let checked=0;
-        for(const entry of fs.readdirSync(this.root,{withFileTypes:true})){
-          const stat=fs.lstatSync(path.join(this.root,entry.name));if(!stat.isFile()||stat.isSymbolicLink())throw Error('첨부 폴더의 파일을 확인해주세요.');used+=stat.size;
-          if(++checked%128===0){
-            await setImmediate();
-            const current=fs.lstatSync(this.root);
-            if(!current.isDirectory()||current.isSymbolicLink()||fs.realpathSync(this.root)!==this.root||['dev','ino','mtimeMs','ctimeMs'].some(key=>current[key]!==rootBefore[key]))throw Error('첨부 폴더가 변경됐어요. 다시 첨부해주세요.');
-          }
-        }
-        const rootAfter=fs.lstatSync(this.root);
-        if(!rootAfter.isDirectory()||rootAfter.isSymbolicLink()||fs.realpathSync(this.root)!==this.root||['dev','ino','mtimeMs','ctimeMs'].some(key=>rootAfter[key]!==rootBefore[key]))throw Error('첨부 폴더가 변경됐어요. 다시 첨부해주세요.');
+        const destination=path.join(this.root,hash+extension);
         const attachment={id,kind:'file',name,bytes:bytes.length,hash,extension};
-        if(fs.existsSync(destination))this.read(attachment);
-        else{
-          if(used+bytes.length>512*1024*1024)throw Error('첨부 저장 공간이 512MiB 한도에 도달했어요.');
-          const temporary=destination+'.tmp-'+randomUUID();
-          try{await fs.promises.writeFile(temporary,bytes,{flag:'wx',mode:0o600});if(fs.realpathSync(this.root)!==this.root)throw Error('첨부 폴더가 변경됐어요.');try{fs.linkSync(temporary,destination);}catch(error){if(error.code!=='EEXIST')throw error;this.read(attachment);}}finally{fs.rmSync(temporary,{force:true});}
-        }
+        pending.set(destination,{bytes,verify:()=>this.read(attachment)});
         attachments.push(attachment);
       }
     }
+    await publishCacheFiles(this.root,pending,{label:'첨부'});
     return attachments;
   }
   read(attachment){
@@ -67,9 +59,8 @@ class AttachmentStore {
     if(!attachment||typeof attachment.hash!=='string'||!/^[a-f0-9]{64}$/.test(attachment.hash)||!Number.isSafeInteger(attachment.bytes)||attachment.bytes<1||attachment.bytes>16*1024*1024)throw Error('첨부 정보를 확인해주세요.');
     if(attachment.kind==='image')return this.images.read({id:attachment.hash,mime:attachment.mime});
     if(attachment.kind!=='file'||typeof attachment.extension!=='string'||!/^\.[a-z0-9]{1,16}$/.test(attachment.extension)||fs.realpathSync(this.root)!==this.root)throw Error('첨부 경로를 확인해주세요.');
-    const file=path.join(this.root,attachment.hash+attachment.extension);if(fs.lstatSync(file).isSymbolicLink())throw Error('첨부 파일의 링크는 사용할 수 없어요.');
-    const descriptor=fs.openSync(file,fs.constants.O_RDONLY|(fs.constants.O_NOFOLLOW??0));let bytes;
-    try{const stat=fs.fstatSync(descriptor);if(!stat.isFile()||stat.size!==attachment.bytes)throw Error('첨부 사본이 변경됐어요. 다시 첨부해주세요.');const buffer=Buffer.alloc(attachment.bytes+1);let count=0;while(count<buffer.length){const read=fs.readSync(descriptor,buffer,count,buffer.length-count,null);if(!read)break;count+=read;}bytes=buffer.subarray(0,count);}finally{fs.closeSync(descriptor);}
+    const file=path.join(this.root,attachment.hash+attachment.extension),changed='첨부 사본이 변경됐어요. 다시 첨부해주세요.';
+    const bytes=readBoundedFile(file,{limit:attachment.bytes,expectedSize:attachment.bytes,changed,oversized:changed});
     if(bytes.length!==attachment.bytes||createHash('sha256').update(bytes).digest('hex')!==attachment.hash)throw Error('첨부 사본이 변경됐어요. 다시 첨부해주세요.');
     return{file};
   }

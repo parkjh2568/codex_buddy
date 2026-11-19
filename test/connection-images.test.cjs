@@ -231,8 +231,15 @@ test('concurrent image commits enforce the shared cache budget and deduplicate i
   const library=new ResponseImages(path.join(root,'images'),{validate:async candidate=>{candidate.thumbnail=candidate.imageFiles[0].source;}});
   const padding=path.join(library.root,'padding'),descriptor=fs.openSync(padding,'wx');try{fs.ftruncateSync(descriptor,512*1024*1024-png.length-1);}finally{fs.closeSync(descriptor);}
   const different=Buffer.from(png);different[different.length-1]^=1;
-  let release,entered;const blocked=new Promise(resolve=>{entered=resolve;}),write=fs.promises.writeFile;
-  t.mock.method(fs.promises,'writeFile',async(...args)=>{if(!release){await new Promise(resolve=>{release=resolve;entered();});}return write(...args);});
+  let release,entered;const blocked=new Promise(resolve=>{entered=resolve;}),open=fs.promises.open;
+  t.mock.method(fs.promises,'open',async(file,...args)=>{
+    const handle=await open(file,...args);
+    if(args[0]==='wx'&&String(file).includes('.tmp-')&&!release){
+      const write=handle.writeFile.bind(handle);
+      handle.writeFile=async(...data)=>{await new Promise(resolve=>{release=resolve;entered();});return write(...data);};
+    }
+    return handle;
+  });
   const first=library.capture({type:'imageGeneration',id:'first',status:'completed',result:png.toString('base64')});await blocked;
   const second=library.capture({type:'imageGeneration',id:'second',status:'completed',result:different.toString('base64')});release();
   const results=(await Promise.all([first,second])).flat();assert.deepEqual(results.map(item=>item.status),['ready','failed']);assert.match(results[1].error,/512MiB/);
@@ -243,12 +250,19 @@ test('concurrent image commits enforce the shared cache budget and deduplicate i
 });
 
 test('image commit failures release waiting captures and clean temporary files',async t=>{
-  const write=fs.promises.writeFile;
+  const open=fs.promises.open;
   for(const failedWrite of [1,2]){
     const root=fs.mkdtempSync(path.join(os.tmpdir(),'onggi-image-write-failure-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
     const preview=Buffer.from(png);preview[preview.length-1]^=1;
     const library=new ResponseImages(root,{validate:async candidate=>{candidate.thumbnail='data:image/png;base64,'+preview.toString('base64');}});
-    let writes=0;const mock=t.mock.method(fs.promises,'writeFile',async(...args)=>{await write(...args);if(++writes===failedWrite)throw Error('fixture disk full');});
+    let writes=0;const mock=t.mock.method(fs.promises,'open',async(file,...args)=>{
+      const handle=await open(file,...args);
+      if(args[0]==='wx'&&String(file).includes('.tmp-')){
+        const write=handle.writeFile.bind(handle);
+        handle.writeFile=async(...data)=>{await write(...data);if(++writes===failedWrite)throw Error('fixture disk full');};
+      }
+      return handle;
+    });
     try{
       const results=(await Promise.all([library.capture({type:'imageGeneration',id:'failed',status:'completed',result:png.toString('base64')}),library.capture({type:'imageGeneration',id:'next',status:'completed',result:png.toString('base64')})])).flat();
       assert.deepEqual(results.map(item=>item.status),['failed','ready']);assert.equal(library.saveWork,null);assert.equal(fs.readdirSync(root).length,2);assert.ok(library.read(results[1]).bytes.equals(png));
@@ -273,4 +287,27 @@ test('corrupt stored image/attachment/skill identifiers fail closed while origin
   assert.throws(()=>store.readHistory([store.data.activeConversationId]),/ID/);assert.throws(()=>images.read({id:[image.id],mime:image.mime}),/정보/);
   assert.throws(()=>attachments.read({...attachment,hash:[attachment.hash]}),/정보/);assert.throws(()=>attachments.read({...attachment,extension:[attachment.extension]}),/경로/);
   assert.ok(fs.readFileSync(source).equals(Buffer.from('note')));assert.ok(images.read(image).bytes.equals(png));
+});
+
+test('an owned saved image replaced between observation and open is rejected',async t=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'onggi-response-source-race-'));
+  t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+  const file=path.join(fs.realpathSync(root),'source.png');
+  fs.writeFileSync(file,png);
+  const library=new ResponseImages(path.join(root,'cache'),{validate:async()=>assert.fail('unsafe bytes reached validation')});
+  const open=fs.openSync;let replaced=false;
+  t.mock.method(fs,'openSync',(name,...args)=>{
+    if(name===file&&!replaced){
+      replaced=true;
+      fs.renameSync(file,file+'.original');
+      fs.writeFileSync(file,png);
+    }
+    return open(name,...args);
+  });
+  const [result]=await library.capture({type:'imageGeneration',id:'source-race',status:'completed',savedPath:file},{workspace:root});
+  assert.equal(result.status,'failed');
+  assert.match(result.error,/변경/);
+  assert.equal(replaced,true);
+  assert.deepEqual(fs.readFileSync(file+'.original'),png);
+  assert.deepEqual(fs.readdirSync(library.root),[]);
 });
