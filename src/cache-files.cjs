@@ -116,10 +116,10 @@ async function publishCacheFiles(root, files, { label, onStart }) {
       for (const [temporary, { identity, entry }] of staged) {
         const stat = fs.lstatSync(temporary, { throwIfNoEntry: false });
         if (stat?.isFile() && stat.dev === identity.dev && stat.ino === identity.ino &&
-            stat.size === entry.bytes.length) {
+            stat.size <= entry.bytes.length) {
           try {
-            if (readBoundedFile(temporary, { limit: stat.size, observed: stat, changed, oversized: changed }).equals(entry.bytes))
-              fs.unlinkSync(temporary);
+            const bytes = readBoundedFile(temporary, { limit: stat.size, observed: stat, changed, oversized: changed });
+            if (entry.bytes.subarray(0, stat.size).equals(bytes)) fs.unlinkSync(temporary);
           } catch {
             // A different or changed file at this path stays available for inspection.
           }

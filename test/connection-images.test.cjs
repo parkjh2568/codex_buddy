@@ -251,7 +251,7 @@ test('concurrent image commits enforce the shared cache budget and deduplicate i
 
 test('image commit failures release waiting captures and clean temporary files',async t=>{
   const open=fs.promises.open;
-  for(const failedWrite of [1,2]){
+  for(const failedWrite of [1,2,3]){
     const root=fs.mkdtempSync(path.join(os.tmpdir(),'onggi-image-write-failure-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
     const preview=Buffer.from(png);preview[preview.length-1]^=1;
     const library=new ResponseImages(root,{validate:async candidate=>{candidate.thumbnail='data:image/png;base64,'+preview.toString('base64');}});
@@ -259,7 +259,12 @@ test('image commit failures release waiting captures and clean temporary files',
       const handle=await open(file,...args);
       if(args[0]==='wx'&&String(file).includes('.tmp-')){
         const write=handle.writeFile.bind(handle);
-        handle.writeFile=async(...data)=>{await write(...data);if(++writes===failedWrite)throw Error('fixture disk full');};
+        handle.writeFile=async(bytes)=>{
+          const index=++writes;
+          if(failedWrite===3&&index===1){await write(bytes.subarray(0,5));throw Error('fixture disk full');}
+          await write(bytes);
+          if(index===failedWrite&&failedWrite!==3)throw Error('fixture disk full');
+        };
       }
       return handle;
     });
