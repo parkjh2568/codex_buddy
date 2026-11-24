@@ -1,16 +1,16 @@
 {
   "id": "paper",
-  "name": "종이와 올리브",
+  "name": "따뜻한 종이",
   "colors": {
-    "cream": "#faf9f4",
-    "text": "#303a32",
-    "muted": "#656f62",
-    "line": "#e3e6dc",
-    "surface": "#fffefa",
-    "wash": "#eaf0e1",
-    "green": "#48644c",
-    "accentInk": "#ffffff",
+    "cream": "#f5f2eb",
+    "text": "#2e2925",
+    "muted": "#6b6259",
+    "line": "#d9d2c6",
+    "surface": "#fbf9f4",
+    "wash": "#e9e3d8",
+    "green": "#6b5b4d",
+    "accentInk": "#fffefa",
     "field": "#fffefa",
-    "danger": "#985f43"
+    "danger": "#9b4f46"
   }
 }

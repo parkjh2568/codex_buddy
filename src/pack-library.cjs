@@ -2,6 +2,7 @@ const fs=require('node:fs');
 const path=require('node:path');
 const {randomUUID,createHash}=require('node:crypto');
 const {loadPack}=require('./packs.cjs');
+const {readBoundedFile}=require('./bounded-file.cjs');
 class PackLibrary{
   constructor(directory){
     this.directory=fs.realpathSync(directory);this.root=path.join(this.directory,'characters');this.journal=path.join(this.directory,'pack-change.json');this.warning=null;
@@ -11,7 +12,7 @@ class PackLibrary{
     if(!fs.existsSync(this.journal))return;
     if(store.writeBlocked)throw Error('대화 저장을 복구한 뒤 캐릭터 변경을 복구해주세요.');
     if(fs.lstatSync(this.journal).isSymbolicLink()||!fs.statSync(this.journal).isFile()||fs.statSync(this.journal).size>131072)throw Error('캐릭터 복구 파일을 확인해주세요.');
-    const pending=JSON.parse(fs.readFileSync(this.journal,'utf8'));
+    const pending=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(readBoundedFile(this.journal,131072)));
     if(!pending||pending.version!==1||!['prepared','committed'].includes(pending.phase)||!['install','replace','remove'].includes(pending.operation)||typeof pending.id!=='string'||!/^[a-z][a-z0-9-]{0,47}$/.test(pending.id)||typeof pending.stage!=='string'||!/^\.stage-[a-f0-9-]{36}$/.test(pending.stage)||typeof pending.backup!=='string'||!/^\.archive-[a-f0-9-]{36}$/.test(pending.backup)||!pending.before||typeof pending.before.characterId!=='string'||!/^[a-z][a-z0-9-]{0,47}$/.test(pending.before.characterId)||!pending.before.personaModes||typeof pending.before.personaModes!=='object'||Array.isArray(pending.before.personaModes)||!Array.isArray(pending.createdPersonas)||pending.createdPersonas.length>9)throw Error('캐릭터 복구 범위를 확인해주세요.');
     for(const [id,mode]of Object.entries(pending.before.personaModes))if(!/^[a-z][a-z0-9-]{0,47}$/.test(id)||typeof mode!=='string'||!/^[a-z][a-z0-9-]{0,47}$/.test(mode))throw Error('캐릭터 이전 설정을 확인해주세요.');
     if(typeof pending.personaDirectoryCreated!=='boolean'||pending.oldRevision!==null&&(typeof pending.oldRevision!=='string'||!/^[a-f0-9]{64}$/.test(pending.oldRevision))||pending.newRevision!==null&&(typeof pending.newRevision!=='string'||!/^[a-f0-9]{64}$/.test(pending.newRevision))||pending.operation==='install'&&pending.oldRevision!==null||pending.operation==='remove'&&pending.newRevision!==null)throw Error('캐릭터 복구 버전을 확인해주세요.');
@@ -43,7 +44,7 @@ class PackLibrary{
     if(fs.existsSync(personaDirectory)&&fs.realpathSync(personaDirectory)!==personaDirectory)throw Error('말투 복구 폴더를 확인해주세요.');
     for(const entry of pending.createdPersonas){
       const file=path.join(personaDirectory,entry.id+'.md');
-      if(fs.existsSync(file)){if(fs.lstatSync(file).isSymbolicLink()||!fs.statSync(file).isFile()||fs.statSync(file).size>16384||createHash('sha256').update(fs.readFileSync(file)).digest('hex')!==entry.hash)throw Error('수정한 말투를 보존했습니다.');fs.unlinkSync(file);}
+      if(fs.existsSync(file)){if(fs.lstatSync(file).isSymbolicLink()||!fs.statSync(file).isFile()||fs.statSync(file).size>16384||createHash('sha256').update(readBoundedFile(file,16384)).digest('hex')!==entry.hash)throw Error('수정한 말투를 보존했습니다.');fs.unlinkSync(file);}
     }
     if(pending.personaDirectoryCreated&&fs.existsSync(personaDirectory)&&!fs.readdirSync(personaDirectory).length)fs.rmdirSync(personaDirectory);
     store.data.settings={...store.data.settings,...pending.before};store.save({includeHistory:false});fs.unlinkSync(this.journal);
@@ -60,11 +61,20 @@ class PackLibrary{
     const personaDirectory=path.join(this.directory,'personas',id),personaDirectoryCreated=!fs.existsSync(personaDirectory);
     if(!personaDirectoryCreated&&fs.realpathSync(personaDirectory)!==personaDirectory)throw Error('말투 폴더의 심볼릭 링크를 사용할 수 없습니다.');
     const pending={version:1,phase:'prepared',operation,id,stage:stageName,backup:backupName,oldRevision:existing?.revision??null,newRevision:operation==='remove'?null:pack.revision,before:{characterId:store.data.settings.characterId,personaModes:{...store.data.settings.personaModes}},createdPersonas:operation==='remove'?[]:(pack.personas??[]).filter(e=>!fs.existsSync(path.join(personaDirectory,e.id+'.md'))).map(e=>({id:e.id,hash:createHash('sha256').update(e.text).digest('hex')})),personaDirectoryCreated};
-    let temporary;
+    let temporary;const stagedDirectories=[],stagedFiles=[];
     try{
       if(operation!=='remove'){
-        fs.mkdirSync(stage);fs.writeFileSync(path.join(stage,'manifest.json'),JSON.stringify(pack.manifest,null,2),{flag:'wx',mode:0o600});
-        for(const [relative,bytes]of pack.contents){const file=path.resolve(stage,relative);if(!file.startsWith(stage+path.sep))throw Error('임시 팩 파일 경로를 확인해주세요.');fs.mkdirSync(path.dirname(file),{recursive:true});fs.writeFileSync(file,bytes,{flag:'wx',mode:0o600});}
+        fs.mkdirSync(stage);stagedDirectories.push({file:stage,stat:fs.lstatSync(stage)});
+        const output=new Map([['manifest.json',Buffer.from(JSON.stringify(pack.manifest,null,2))],...pack.contents]);
+        for(const [relative,bytes]of output){
+          const file=path.resolve(stage,relative);if(!file.startsWith(stage+path.sep)||fs.realpathSync(stage)!==stage)throw Error('임시 팩 파일 경로를 확인해주세요.');
+          let folder=stage;
+          for(const part of path.relative(stage,path.dirname(file)).split(path.sep).filter(Boolean)){
+            folder=path.join(folder,part);try{fs.mkdirSync(folder);stagedDirectories.push({file:folder,stat:fs.lstatSync(folder)});}catch(error){if(error.code!=='EEXIST')throw error;}
+            if(fs.lstatSync(folder).isSymbolicLink()||!fs.statSync(folder).isDirectory()||fs.realpathSync(folder)!==folder)throw Error('임시 팩 폴더 경로를 확인해주세요.');
+          }
+          const descriptor=fs.openSync(file,'wx',0o600);try{stagedFiles.push({file,stat:fs.fstatSync(descriptor),bytes});fs.writeFileSync(descriptor,bytes);}finally{fs.closeSync(descriptor);}
+        }
         if(loadPack(stage).revision!==pack.revision)throw Error('검증한 팩과 임시 파일이 다릅니다.');
       }
       fs.writeFileSync(this.journal,JSON.stringify(pending),{flag:'wx',mode:0o600});
@@ -77,14 +87,23 @@ class PackLibrary{
     }catch(error){
       if(fs.existsSync(this.journal)){
         try{this.recover(store);}catch(recovery){store.writeBlocked=true;this.warning='캐릭터 변경 복구가 필요합니다. '+recovery.message;}
-      }else if(fs.existsSync(stage))fs.rmSync(stage,{recursive:true,force:true});
+      }else{
+        for(const entry of stagedFiles.reverse())try{const stat=fs.lstatSync(entry.file);if(stat.isFile()&&!stat.isSymbolicLink()&&stat.dev===entry.stat.dev&&stat.ino===entry.stat.ino&&stat.size===entry.bytes.length&&fs.realpathSync(entry.file)===entry.file&&readBoundedFile(entry.file,entry.bytes.length).equals(entry.bytes))fs.unlinkSync(entry.file);}catch{}
+        for(const entry of stagedDirectories.reverse())try{const stat=fs.lstatSync(entry.file);if(stat.isDirectory()&&!stat.isSymbolicLink()&&stat.dev===entry.stat.dev&&stat.ino===entry.stat.ino&&fs.realpathSync(entry.file)===entry.file)fs.rmdirSync(entry.file);}catch{}
+        if(stagedDirectories.length&&fs.lstatSync(stage,{throwIfNoEntry:false}))this.warning='정리하지 못한 임시 팩 파일을 보존했습니다: '+stage;
+      }
       throw error;
     }finally{if(temporary)fs.rmSync(temporary,{force:true});}
   }
   archives(){
     const entries=[];
     for(const name of fs.readdirSync(this.directory).filter(n=>/^\.archive-[a-f0-9-]{36}$/.test(n))){
-      const directory=path.join(this.directory,name);try{if(fs.lstatSync(directory).isSymbolicLink()||!fs.statSync(directory).isDirectory())continue;const pack=loadPack(directory);entries.push({token:name,id:pack.manifest.id,name:pack.manifest.name,version:pack.manifest.version,at:fs.statSync(directory).mtimeMs});}catch{}}
+      const directory=path.join(this.directory,name);try{
+        const stat=fs.lstatSync(directory);if(stat.isSymbolicLink()||!stat.isDirectory()||fs.realpathSync(directory)!==directory)continue;
+        const manifest=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(readBoundedFile(path.join(directory,'manifest.json'),65536)));
+        if(!manifest||Array.isArray(manifest)||![1,2].includes(manifest.schemaVersion)||typeof manifest.id!=='string'||!/^[a-z][a-z0-9-]{0,47}$/.test(manifest.id)||typeof manifest.name!=='string'||!manifest.name.trim()||Array.from(manifest.name.trim().normalize('NFC')).length>60)continue;
+        entries.push({token:name,id:manifest.id,name:manifest.name,version:String(manifest.version??'1.0.0').slice(0,30),at:stat.mtimeMs});
+      }catch{}}
     return entries.sort((a,b)=>b.at-a.at);
   }
   export(pack,directory,personas){
@@ -112,7 +131,7 @@ class PackLibrary{
       loadPack(destination);return destination;
     }catch(error){
       for(const entry of written.reverse()){
-        try{const stat=fs.lstatSync(entry.file);if(stat.isFile()&&!stat.isSymbolicLink()&&stat.dev===entry.stat.dev&&stat.ino===entry.stat.ino&&stat.size===entry.bytes.length&&fs.realpathSync(entry.file)===entry.file&&fs.readFileSync(entry.file).equals(entry.bytes))fs.unlinkSync(entry.file);}catch{}
+        try{const stat=fs.lstatSync(entry.file);if(stat.isFile()&&!stat.isSymbolicLink()&&stat.dev===entry.stat.dev&&stat.ino===entry.stat.ino&&stat.size===entry.bytes.length&&fs.realpathSync(entry.file)===entry.file&&readBoundedFile(entry.file,entry.bytes.length).equals(entry.bytes))fs.unlinkSync(entry.file);}catch{}
       }
       for(const entry of directories.reverse()){
         try{const stat=fs.lstatSync(entry.file);if(stat.isDirectory()&&!stat.isSymbolicLink()&&stat.dev===entry.stat.dev&&stat.ino===entry.stat.ino&&fs.realpathSync(entry.file)===entry.file)fs.rmdirSync(entry.file);}catch{}

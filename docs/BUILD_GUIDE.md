@@ -1,26 +1,12 @@
-# macOS·Windows 빌드 가이드
+# 개발과 빌드
 
-기준: 2026-10-16, 프로젝트 `0.1.0-alpha.22`. 현재 검증용 staging은 build38이며 기존 일반 실행 경로 alpha14/build30은 교체하지 않았다. [Mac 후속 결과](MAC_FOLLOWUP_RESULT_2026-10-15.md)에서 최신 소스·검사·전후 측정·패키지를 구분한다. 직전 build37 전체 앱은 `artifacts/mac-followup-2026-10-15/baseline-app37.app`에 보존했고 더 이전 복구 자료는 기존 위치를 유지한다.
-
-이 가이드는 현재 `package.json`과 `scripts/package.cjs`가 제공하는 명령을 기준으로 한다. macOS Apple Silicon 앱 생성·실행은 검증했다. Windows와 Intel Mac/Windows ARM64는 아래 코드 기반 절차를 실제 대상 환경에서 검증해야 한다. 빌드 결과물은 앱 실행 묶음이다. macOS에는 로컬 ad-hoc 서명을 적용하며 Developer ID/공증을 갖춘 외부 배포본이나 설치 프로그램은 아니다.
+이 문서는 환경 준비·개발 실행·검증·아이콘 생성·패키징 명령의 기준이다. 현재 후보/검증 숫자/복구 위치는 [검증 상태](ALPHA_REPORT.md), 사용자 연결 안내는 [사용법](USER_GUIDE.md#첫-연결)을 따른다. 도구 버전은 [package.json](../package.json)과 lock 파일에 고정한다.
 
 ## 1. 빌드 환경과 결과물
 
-| 항목 | 현재 기준 |
-|---|---|
-| Node.js | 권장: 검증한 24.x. 개발 도구 포함: 22.13 이상(22.x) 또는 24 이상 |
-| 실제 macOS 검증 환경 | Node.js 24.21.0, npm 11.19.0, Apple Silicon |
-| Electron | 44.5.1 |
-| 패키징 도구 | `@electron/packager` 20.3.0 |
-| 렌더러 번들 | esbuild 0.28.2 |
-| 의존성 설치 | `npm ci`로 package-lock.json의 고정 버전 사용 |
-| GUI | 개발 실행·아이콘 생성·UI smoke는 데스크톱 세션 필요 |
-| 네트워크 | npm 의존성과 공식 Electron 배포 파일 다운로드에 필요 |
-| Codex CLI | 앱 빌드·체험에 불필요. 실제 대화에 별도 설치·로그인 필요 |
+Node.js는 22.13 이상인 22.x 또는 24 이상을 사용한다. 검증 환경의 24.x를 권장한다. npm 의존성과 공식 Electron 바이너리 다운로드에는 네트워크가 필요하다. 실제 대화에는 별도의 CLI/인증이 필요하지만 빌드·체험에는 필요하지 않다.
 
-소스 전체와 `package-lock.json`, `characters/`, `skins/`, `assets/`를 가져온다. 다른 OS의 `node_modules`나 Electron 실행 파일을 복사해서 재사용하지 않고 대상 환경에서 `npm ci`를 실행한다. 현재 저장소에는 빌드에 필요한 생성 아이콘이 들어 있어 일반 빌드 전에 아이콘을 재생성할 필요는 없다.
-
-현재 스크립트는 `platform:process.platform`, `arch:process.arch`를 사용한다. 하드웨어 CPU와 실행 중인 Node.js의 아키텍처는 다를 수 있다. 먼저 프로젝트 루트에서 확인한다.
+소스·package-lock.json·characters/·skins/·assets/를 가져와 대상 OS/CPU에서 npm ci를 실행한다. 다른 OS의 node_modules/Electron을 재사용하지 않는다. 생성 아이콘은 포함돼 있어 일반 빌드 전에 다시 만들 필요 없다. GUI 실행은 데스크톱 세션이 필요하다.
 
 ```sh
 node --version
@@ -28,255 +14,223 @@ npm --version
 node -p "process.platform + '/' + process.arch"
 ```
 
-| 표시 결과 | 생성 폴더 | 실행 파일 | 확인 상태 |
-|---|---|---|---|
-| `darwin/arm64` | `dist/OnggiBot-darwin-arm64/` | `OnggiBot.app` | macOS 생성·실행 검증 |
-| `darwin/x64` | `dist/OnggiBot-darwin-x64/` | `OnggiBot.app` | Intel Mac 실기 미검증 |
-| `win32/x64` | `dist/OnggiBot-win32-x64/` | `OnggiBot.exe` | Windows 실기 미검증 |
-| `win32/arm64` | `dist/OnggiBot-win32-arm64/` | `OnggiBot.exe` | Windows ARM64 실기 미검증 |
+| Node 실행 환경 | 출력 디렉터리 | 상태 |
+|---|---|---|
+| darwin/arm64 | dist/OnggiBot-darwin-arm64/OnggiBot.app | Mac Apple Silicon 실행 이력 있음. 현재 후보 수용은 ALPHA_REPORT 확인 |
+| darwin/x64 | dist/OnggiBot-darwin-x64/OnggiBot.app | Intel Mac 실기 미검증 |
+| win32/x64 | dist/OnggiBot-win32-x64/OnggiBot.exe | Windows 실기 미검증 |
+| win32/arm64 | dist/OnggiBot-win32-arm64/OnggiBot.exe | Windows ARM64 실기 미검증 |
 
-`win32`는 OS 구분 이름이고, `x64`/`arm64` 결과물은 64비트다. Electron 44는 공식 Windows `ia32` 바이너리를 제공하지 않으므로 32비트 Node.js로 빌드하지 않는다. 이 내용과 최소 Node 버전은 설치된 Packager README/engines에서 확인했다.
-
-Rosetta로 실행한 x64 Node는 Apple Silicon Mac에서도 x64 앱을 만든다. Windows ARM 기기에서 x64 Node를 사용해도 x64 결과물이 생성된다. 네이티브 ARM64 빌드가 필요하면 ARM64 Node와 해당 환경의 의존성을 사용한다.
+타깃은 하드웨어가 아닌 실행 중 Node의 process.platform/process.arch다. Rosetta x64 Node는 Apple Silicon에서도 x64를 만든다. 현재 Electron은 win32/ia32를 제공하지 않으므로 32비트 Node로 빌드하지 않는다. 크로스 빌드·universal·CI 행렬 옵션은 제공하지 않는다.
 
 ## 2. MacBook/macOS 빌드
 
-터미널에서 소스 폴더로 이동한다. 아래 경로는 현재 프로젝트 위치이며 다른 PC에서는 실제 경로로 바꾼다.
+프로젝트 폴더에서 실행한다. 기본 검증은 창을 열지 않는다.
 
 ```sh
-cd /Users/jhpark/code/my_budy
-node -p "process.platform + '/' + process.arch"
 npm ci
-npm run check
-npm run lint
-npm test
-npm run package
-```
-
-Apple Silicon 결과를 실행한다.
-
-```sh
-open "dist/OnggiBot-darwin-arm64/OnggiBot.app"
-```
-
-Intel Mac에서 `darwin/x64`로 빌드했다면 다음 경로를 사용한다.
-
-```sh
-open "dist/OnggiBot-darwin-x64/OnggiBot.app"
-```
-
-`npm run package`가 렌더러 빌드를 먼저 수행하므로 `npm run build`를 별도로 반복할 필요는 없다. 동일 타깃의 `dist` 결과는 `overwrite:true`에 따라 교체된다. 빌드 결과를 갱신하기 전 기존 앱을 정상 종료하고, 보존할 이전 결과가 있으면 별도 위치에 보관한다.
-
-### 실행 중인 앱을 유지하며 검토 빌드를 만들 때
-
-```sh
+npm run verify
 npm run package -- --staging
 ```
 
-이 옵션은 출력 폴더만 `dist/staging/`으로 바꾼다. Apple Silicon 결과는 `dist/staging/OnggiBot-darwin-arm64/OnggiBot.app`, Windows x64 결과는 `dist/staging/OnggiBot-win32-x64/OnggiBot.exe`다. 현재 실행 앱을 교체하지 않으므로 파일 검토에 사용한다. 기존 앱이 실행 중이면 같은 앱 식별자의 단일 실행 정책 때문에 새 빌드 실행이 기존 앱으로 전달될 수 있다. 최종 실행 검증은 기존 앱을 정상 종료한 뒤 수행한다.
+staging은 dist/staging/에 생성한다. 기본 package는 표의 dist/에 생성하며 같은 타깃을 overwrite한다. **staging도 기존 staging을 덮어쓴다.** 해당 묶음을 먼저 정상 종료하고 보존할 이전 앱을 별도 위치로 옮긴다. 같은 앱 ID의 기존 프로세스가 살아 있으면 새 앱 실행이 기존 앱으로 전달될 수 있다.
 
-### 개발 실행
-
-```sh
-npm start
-```
-
-실제 Codex 호출 없이 확인하려면 체험 모드를 사용한다.
+Apple Silicon 후보를 직접 실행할 때:
 
 ```sh
-npm run demo
+open "dist/staging/OnggiBot-darwin-arm64/OnggiBot.app"
 ```
 
-`demo`는 연결 모드만 체험으로 고정한다. 일반 개발 앱 프로필을 사용하므로 실제 사용 기록과 완전히 분리된 테스트가 필요하면 아래 smoke 명령을 사용한다.
+Intel 결과는 경로의 arm64를 x64로 바꾼다. 개발 실행은 npm start, 모델 없는 체험은 npm run demo다. demo는 일반 개발 프로필을 공유하므로 격리 검사로 취급하지 않는다.
 
 ### Mac 아이콘을 수정한 경우에만
 
 ```sh
 npm run icons:generate
 npm run icons:icns
-npm run package
+npm run package -- --staging
 ```
 
-- `icons:generate`: 사용자 원본 `assets/tray-source.png`로 앱 PNG·Windows ICO와 메뉴 막대 18px/36px PNG 생성. 원본 그림은 보존하고 투명 여백을 제외해 중앙 배치한다.
-- `icons:icns`: macOS의 `sips`와 `iconutil`로 앱 PNG를 ICNS로 변환. 이 명령은 Windows에서 실행할 수 없다.
-- 앱 아이콘을 바꾸고 `icons:icns`를 생략하면 macOS 패키지는 이전 ICNS를 사용할 수 있다.
+icons:generate는 assets/tray-source.png를 보존하고 투명 여백을 제외해 중앙 배치한 앱 PNG/Windows ICO·메뉴 막대 18px/36px PNG를 만든다. 앱/Windows 트레이는 밝은 바탕, macOS 트레이는 투명 템플릿이다. 상단 로고도 같은 그림을 스킨 색상으로 표시한다. icons:icns는 macOS의 sips/iconutil을 사용한다. ICNS 단계를 생략하면 이전 아이콘이 들어갈 수 있다. 선택형 Icon Composer .icon 미발견 경고와 실제 ICNS 누락·빌드 실패를 구분한다.
 
-패키징 중 `.icon` 형식이 없다는 경고가 나올 수 있다. 현재 프로젝트는 ICNS를 제공하며 Icon Composer의 `.icon` 자산은 제공하지 않는다. 설치된 Packager의 옵션 설명과 실제 앱 아이콘을 확인하고, 빌드 종료 코드와 `.app` 생성 결과를 별도로 판단한다.
+기본 팩 재생성은 npm run characters:generate다. SVG/기하 필드는 바뀌며 기존 MD·metadata·추가 파일은 보존한다. [생성기 소유 범위](CHARACTER_PACKS.md#기본-팩-재생성)를 먼저 확인한다.
 
 ## 3. Windows 빌드
 
-Windows 네이티브 환경에서 빌드한다. 첫 검증 대상은 Windows 11 x64를 권장하며, 현재 Windows 실행 성공을 확인한 상태는 아니다. 아래는 PowerShell 명령이다.
-
-`C:\path\to\my_budy`를 실제 소스 폴더로 바꾼다.
+아래는 코드 기준 절차이며 Windows 성공 기록이 아니다. Windows 네이티브 PowerShell에서 실제 소스 폴더로 이동하고 해당 CPU Node를 사용한다. npm.ps1 정책 오류를 피하려 npm.cmd를 사용하며 전체 실행 정책 변경이나 관리자 실행을 기본 요구로 삼지 않는다.
 
 ```powershell
 Set-Location 'C:\path\to\my_budy'
-node --version
-npm.cmd --version
 node -p "process.platform + '/' + process.arch"
 npm.cmd ci
-npm.cmd run check
-npm.cmd run lint
-npm.cmd run package
+npm.cmd run verify
+npm.cmd run package -- --staging
+Start-Process '.\dist\staging\OnggiBot-win32-x64\OnggiBot.exe'
 ```
 
-x64 결과를 실행한다.
+ARM64 Node로 생성한 경우 경로를 win32-arm64로 바꾼다. 개발 실행은 npm.cmd start, 체험은 npm.cmd run demo다. 아이콘을 수정했다면 npm.cmd run icons:generate 후 재패키징한다. Windows에서 icons:icns는 실행하지 않는다. PNG/ICO 생성의 플랫폼 분기는 있지만 실제 Windows 실행은 별도 확인한다.
+
+전달에는 exe만 복사하지 않고 타깃 폴더 전체가 필요하다. 예:
 
 ```powershell
-Start-Process '.\dist\OnggiBot-win32-x64\OnggiBot.exe'
+Compress-Archive -Path '.\dist\staging\OnggiBot-win32-x64\*' -DestinationPath '.\dist\OnggiBot-win32-x64.zip'
 ```
 
-Node가 `win32/arm64`라고 표시되고 해당 빌드가 생성된 경우에는 다음 경로를 사용한다.
-
-```powershell
-Start-Process '.\dist\OnggiBot-win32-arm64\OnggiBot.exe'
-```
-
-PowerShell에서 `npm.ps1` 실행 정책 오류를 피하기 위해 `npm.cmd`를 사용했다. 일반 빌드를 위해 관리자 실행이나 전체 스크립트 실행 정책 변경을 기본 절차로 요구하지 않는다.
-
-### Windows 개발 실행·아이콘 재생성
-
-```powershell
-npm.cmd start
-```
-
-체험 모드:
-
-```powershell
-npm.cmd run demo
-```
-
-앱 아이콘 PNG/ICO 또는 메뉴 막대 PNG를 다시 만들 때:
-
-```powershell
-npm.cmd run icons:generate
-npm.cmd run package
-```
-
-Windows에서는 `icons:icns`를 실행하지 않는다. Windows 패키징은 `assets/icon.ico`, 트레이는 컬러 `assets/icon.png`를 사용한다. 생성 스크립트의 macOS 템플릿 표시는 macOS에서만 검증하도록 분리했다. Windows에서 해당 명령을 실제 실행해 확인한 것은 아니다. [Electron 템플릿 이미지](https://www.electronjs.org/docs/latest/api/native-image#template-image-macos)
-
-### Windows 실행 묶음을 전달할 때
-
-`OnggiBot.exe`만 복사하지 않는다. `dist/OnggiBot-win32-x64` 또는 `dist/OnggiBot-win32-arm64` 폴더 전체가 필요하다. 런타임 DLL·resources·app.asar 등이 함께 있어야 한다.
-
-예를 들어 x64 결과 전체를 ZIP으로 묶을 수 있다.
-
-```powershell
-Compress-Archive -Path '.\dist\OnggiBot-win32-x64\*' -DestinationPath '.\dist\OnggiBot-win32-x64.zip'
-```
-
-동일 이름의 ZIP이 이미 있으면 새 파일 이름으로 저장하거나 이전 파일을 별도 보관한다. 이는 실행 폴더 압축이며 `Setup.exe`·MSI·MSIX 설치 프로그램을 만드는 명령이 아니다.
+기존 ZIP은 다른 이름으로 보존한다. 실행 폴더 압축은 Setup.exe·MSI·MSIX 설치 프로그램 생성이 아니다. Windows는 Node 어댑터/콘솔 인수의 모의 검사와 네이티브/WSL·혼합 DPI·Snap·IME·링크/파일 잠금·트레이·투명 여백의 실기를 구분한다.
 
 ## 4. 검증 명령과 현재 Windows 한계
 
-| 명령 | 역할 | 실제 모델 호출 | 참고 |
-|---|---|---|---|
-| `npm run smoke:integration` | 14종 UI 검사, 이름을 인수로 주면 선택 실행 | 없음 | 성공 JSON·exit·프로필 정리 각각 확인 |
-| `npm run verify:package` | staging ASAR·worker·아이콘·큰 이미지·첨부 사본 | 없음 | `--archive <app.asar>` / `--installed`, 개인 자료는 선택형 `--image-items` |
-| `npm run smoke:packaged-resources` | 배포 ASAR 움직임/줄이기/숨김 CPU | 없음 | 경로 인수·ONGGI_SMOKE_ROOT·ONGGI_RESOURCE_PHASE_MS, 기본 30분 |
-| `npm run codex:attachments` | 실제 이미지 색상/파일 표식 읽기 | 있음 | synthetic 입력·ephemeral Luna/high, ONGGI_CODEX_PATH 지원 |
-| `npm run check` | JS 구문·기본 팩 확인 | 없음 | 빌드 전 기본 확인 |
-| `npm run lint` | JS 미정의/미사용·CSS 문법/값/중복 속성 | 없음 | 빌드 전 정적 검사 |
-| `npm run smoke:chat-ui` | `+` 메뉴·답변/이미지 심플 표시·실제 30초 전체 숨김·보호 유예·4모서리 IPC | 없음 | 격리 fixture, native 좌표 0인 Chromium 입력의 실제 geometry는 별도 CUA 검증 |
-| `npm run smoke:attachments` | 이미지/파일 첨부·미니 FIFO·사본 보존·기록 복원 | 없음 | 테스트 CLI/선택창 대역, 실제 모델 검증은 별도 수행 |
-| `npm run smoke:connection-images` | 테스트 CLI 로그인·재연결·이미지 표시/저장 | 없음 | 격리 프로필, 실제 브라우저 인증은 미검증 |
-| `npm run smoke:stability` | 숨김/미니/긴 원문/renderer 종료 복구·스킨 포커스 | 없음 | 격리 체험 프로필, macOS 검증 |
-| `npm run smoke:resources` | 움직임·움직임 줄이기·숨김 각 10분 프로세스 CPU | 없음 | 총 30분, 배터리/전후 비교 검증 아님 |
-| `npm test` | 저장·팩·프로토콜 등 핵심 검증 | 없음 | 최신 소스 macOS 190개 통과(2026-10-16 Mac 후속), Windows 실기/심볼릭 링크 호환 미검증 |
-| `npm run build` | UI 번들·라이선스 고지 생성 | 없음 | 컴파일 단계, 앱 패키지 생성은 별도 |
-| `npm run smoke` | 격리 프로필의 체험 UI·큐 검증 | 없음 | 실제 데스크톱 세션 필요 |
-| `npm run smoke:buddy` | 테스트 CLI의 스킨·미니·페르소나·MD 편집 검증 | 없음 | macOS 검증, Windows 미검증 |
-| `npm run codex:personas` | 두 캐릭터 × 네 모드의 실제 응답·세션 전환 | 있음 | Luna/high, 검증 세션만 생성·보관 처리 |
-| `npm run smoke:floating` | 격리 프로필의 경계 이동·앵커 확인 | 없음 | macOS 검증, Windows 실행 미검증 |
-| `npm run smoke:pointer` | 투명 영역 뒤 버튼의 실제 클릭 | 없음 | 수동 클릭 필요 |
-| `npm run smoke:history` / `smoke:models` / `smoke:timing` / `smoke:delete` | 테스트 CLI 기반 UI 검증 | 없음 | Windows Node 실행 어댑터 모의 검사, 실기 미검증 |
-| `npm run codex:smoke` / `smoke:real` / `codex:delete-smoke` | 실제 CLI·계정 검증 | 있음 | 이용량 사용, Codex 준비 필요 |
+```sh
+npm run verify
+npm run smoke:changed -- --quick
+```
 
-Windows PowerShell에서는 위 npm 명령을 `npm.cmd`로 실행한다.
+verify는 lint/CSS·구문·제공 팩·전체 단위 검사다. 문서만 바꾸면 로컬 링크/앵커·명령·본문 보존·제품 입력 hash와 git diff --check를 확인한다. 문서 편집만을 이유로 전체 단위·GUI·패키지를 반복하지 않는다.
 
-현재 프로토콜 테스트·일부 UI smoke의 `test/fixtures/*.cjs`는 Node 실행 파일과 인수 배열로 시작한다. Electron 실행 시 테스트 스크립트에는 Node 모드를 사용한다. Windows 생성 인수·콘솔 숨김·런처 거절은 모의 검사했고, 심볼릭 링크 생성 테스트와 Windows 실기는 여전히 검증이 필요하다. Windows에서 `npm.cmd test`를 실행해 실패하면 이를 Windows 지원 완료로 처리하지 않는다. 테스트 런처/권한 문제와 앱 코드 결함을 구분해 해결해야 한다.
+smoke:changed는 같은 입력의 최근 성공 증거를 재사용한다. 없으면 창을 열지 않고 blocked/종료 코드 2로 남긴다. --quick 또는 사례 이름으로 범위를 좁힐 수 있다. 재사용을 새 실행으로 집계하지 않는다.
 
-Windows 빌드 후에는 최소한 캐릭터 표시·실제 드래그·Snap/크기 변경 억제·투명 영역 클릭 통과·대화 입력·트레이 위치 초기화·한글 경로·DPI/다중 모니터를 확인한다. 실제 CLI 연결·취소·저장/재개·삭제도 별도로 확인한다. 자세한 남은 범위는 [플로팅 보완 보고서](FLOATING_PET_UPDATE.md)에 있다.
+**사용자가 화면 검증 시간을 허용한 뒤에만** 다음을 실행한다. --interactive는 실행 표시이며 사용자 허용을 대신하지 않는다. 실제 창·키보드·선택기·클립보드·알림은 작업 포커스에 영향을 줄 수 있다. 직접 Electron/CUA 우회, showInactive·숨긴 창·마지막 포커스 복원만으로 방해가 없다고 주장하지 않는다. [AGENTS](../AGENTS.md)를 따른다.
 
-통합/개발용 smoke 명령은 소스 실행에만 적용된다. 배포 검증은 별도의 `verify:package`, ASAR 자원 측정은 `smoke:packaged-resources`를 사용한다. 패키징 앱에서 `--smoke`를 붙여 동일 테스트가 실행된다고 가정하지 않는다.
+```sh
+npm run smoke:quick -- --interactive
+npm run smoke:integration -- --interactive
+npm run verify:package -- --interactive
+```
+
+| 검사 명령 | 범위 |
+|---|---|
+| npm run smoke:quick -- --interactive | expansion·attachments·history·stability·chat-ui 5종. 실제 30초 경과만 생략 |
+| npm run smoke:integration -- --interactive | 전체 15종 실제 실행·재사용 없음. 실제 30초 숨김 포함 |
+| npm run smoke:integration -- --interactive attachments connection-images | 선택한 경계만 실행 |
+| npm run smoke -- --interactive | 체험·기본 정렬·입력/Markdown·큐·notice |
+| npm run smoke:chat-ui -- --interactive | +·답변 선택·심플 수명/보호·미리보기·크기 조절 |
+| npm run smoke:attachments -- --interactive | 파일/이미지 사본·심플 FIFO·취소·기록 복원 |
+| npm run smoke:connection-images -- --interactive | fixture 로그인/재연결·이미지. 실제 인증 아님 |
+| npm run smoke:models -- --interactive | fixture 카탈로그/기본값/Fast·질문별 설정 고정 |
+| npm run smoke:history -- --interactive | 목록·검색·재개·격리·재시작 |
+| npm run smoke:delete -- --interactive | fixture 삭제 확인/실패/보존/재시도 |
+| npm run smoke:buddy -- --interactive | 스킨·심플·말투 MD·팩 |
+| npm run smoke:lifecycle -- --interactive | 잠금/절전 합성 이벤트와 수명·blink. 물리 전원 수용과 구분 |
+| npm run smoke:stability -- --interactive | 숨김/재표시·renderer 복구·긴 원문 |
+| npm run smoke:floating -- --interactive | 합성 이동·앵커·클릭 영역 |
+| npm run smoke:pointer -- --interactive | 투명 여백 뒤 버튼의 수동 마우스 확인 |
+| npm run smoke:timing -- --interactive | fixture 구간·FIFO·ACK·토글 |
+| npm run smoke:performance -- --interactive | 긴 기록·추가 로드·patch·스크롤·용량 |
+| npm run smoke:assets -- --interactive | 격리 이미지 decode/보안 검사 |
+| npm run smoke:resources -- --interactive | 움직임/줄이기/숨김 각 10분. 배터리 개선 비교 아님 |
+| npm run verify:package -- --interactive | 실제 staging ASAR·worker·아이콘·큰 이미지·첨부/복구 |
+| npm run smoke:packaged-resources -- --interactive | ASAR 5상태 자원 관찰 옵션·기본 시간은 아래 설명 |
+
+위 UI/fixture 검사는 실제 모델을 호출하지 않는다. 다음 검사는 실제 계정 이용량을 쓰며 검증용 세션을 생성한다. 요청받은 범위에서만 실행한다.
+
+| 명령 | 영향 |
+|---|---|
+| npm run codex:smoke | 실제 응답·재연결/재개·소유 턴 중단 후 검증 세션 보관 |
+| npm run codex:personas | 두 캐릭터×네 말투 실제 응답/전환·검증 세션 보관 |
+| npm run codex:delete-smoke | 검증용 실제 세션 생성/응답 후 해당 ID 삭제 |
+| npm run smoke:real -- --interactive | 실제 모델+앱 UI 왕복 |
+| npm run codex:attachments -- --interactive | 합성 이미지/파일의 실제 읽기+OS 입력. 원래 클립보드 접근은 별도 허용 |
+
+Windows는 위 npm 명령을 npm.cmd로 바꾼다. check·lint·test는 verify에 포함되며 필요할 때 개별 실행한다. 생성/컴파일만 필요하면 npm run build를 사용한다.
+
+### 증거 재사용과 반복 범위
+
+증거는 artifacts/integration-smoke/last-success.json에 보관한다. 소스·검사 스크립트·fixture·팩/스킨/아이콘·package/lock·Node/Electron·OS/환경 입력 SHA가 같고, 24시간 안에 성공 종료/결과/프로필 정리를 확인한 사례만 재사용한다. 단위/문서는 UI 입력을 바꾸지 않는다. 만료·미래 시각·손상·실패·검사 중 입력 변경은 재사용하지 않고 full chat-ui를 quick 결과로 대체하지 않는다.
+
+PID 잠금으로 재사용까지 직렬화한다. 살아 있는 프로세스의 잠금을 지우지 않는다. 기본 stale 잠금은 복구하지만 runner.lock.recovery가 남으면 소유 프로세스 종료를 확인한다. running/passed:false는 최종 성공이 아니다. 명시적 실제 실행은 성공 JSON·exit·프로필 정리를 각각 확인한다.
+
+소스 변경 뒤 필요한 경계를 먼저 확인하고 릴리스 후보의 전체 통합을 수행한다. 패키지가 바뀌면 실제 ASAR 검사를 추가한다. 기본/quick 검사에 전체 자원 관찰·대형 벤치·history 반복을 묶지 않는다. 해당 경계 변경·실패·비결정적 경합이 있을 때만 넓힌다. 모델 fixture의 소유 턴 명시 완료는 검증 조건을 유지하며 고정 대기만 줄이는 방식이다.
+
+### 출력과 선택형 계측
+
+통합 실행의 ONGGI_SMOKE_ROOT 미지정 시 artifacts/integration-smoke/run-*에 새 결과를 남긴다. 지정하면 실행별 절대 경로를 사용한다. 성공 프로필은 결과 보존 후 정리하고 실패 프로필은 남긴다. JSON의 sourceHashes/scriptHashes/fixtureHashes·시각·정리 상태를 대조한다.
+
+패키지 검사는 --archive 경로 또는 --installed, 선택한 기록 복원은 --image-items JSON을 받는다. 개인 자료를 기본 입력으로 요구하지 않으며 격리 사본만 만든다. packaged-resources는 ASAR 경로·ONGGI_RESOURCE_PHASE_MS·ONGGI_SMOKE_ROOT를 받고 기본 움직임/줄이기/숨김 각 10분을 관찰한다. ONGGI_RESOURCE_BUDDY_PROFILES=1로 정숙/일상을 추가한다. 전원 출처/유휴·실제 이벤트 기록과 정상 복귀/배터리 효과 검증을 구분한다.
+
+선택형 계측은 다음 환경 변수를 기존 UI 명령 앞에 둔다. 모든 GUI 계측은 사용자 시간 허용과 --interactive가 필요하다.
+
+- ONGGI_PERFORMANCE_DETAIL=1: performance의 저장/읽기·검색/내보내기 큰 입력 계측.
+- ONGGI_TIMING_PERFORMANCE_DETAIL=1: timing의 크기별 모의 중단·CPU 계측.
+- ONGGI_HISTORY_COST_REVIEW=1: history의 선택 계측. 기본 artifacts/history-cost, LABEL은 ONGGI_HISTORY_COST_LABEL의 영문/숫자/하이픈 1–64자.
+- ONGGI_NATIVE_CLIPBOARD_REVIEW=1: 현재 OS 클립보드를 읽고 임시 변경/복원하므로 별도 구체적 허용 필요. 복원 write 완료는 원본 payload 재읽기 확인과 다르다.
+
+플로팅 재시작은 같은 ONGGI_SMOKE_ROOT에 floating 검사 → --verify-floating-restore 추가 → --verify-floating-recovery 추가 순서다. 매 단계 npm run smoke:floating -- --interactive를 사용하고 첫 결과/복원 완료를 확인한다. native-floating-review는 실제 마우스가 필요하다. 공용 옛 JSON으로 대체하지 않는다.
 
 ## 5. 현재 패키징 스크립트의 범위
 
-`npm run build`는 렌더러 ESM을 `src/ui/renderer.bundle.js`로 묶고 `THIRD_PARTY_NOTICES.txt`를 생성한다. `npm run package`는 이를 실행한 뒤 Electron 런타임과 앱 소스를 묶는다.
+package는 build를 먼저 수행해 renderer.bundle.js와 THIRD_PARTY_NOTICES.txt를 만든다. store.cjs/store-worker.cjs/history-search-worker.cjs/bounded-file.cjs 네 파일은 app.asar.unpacked/src에 함께 전달한다. 실제 worker 로드·제한 읽기에 필요하다.
 
-대화 저장 워커와 Store는 `app.asar.unpacked/src/store*.cjs`로 함께 전달한다. Worker의 실제 파일 경로 로딩을 위한 구성이며 두 파일을 함께 보존해야 한다. ESLint/css-tree는 개발 검사 전용이며 배포 앱에 포함하지 않는다.
+앱은 src/·characters/·skins/·assets/·번들·라이선스·package metadata를 포함한다. node_modules·artifacts·dist·test·scripts·docs·.git·package-lock·루트 README/TASKS/AGENTS·검사 설정·renderer.mjs·tray-source.png는 제외한다. main은 내장 모듈만 쓰고 renderer 의존성은 번들에 포함한다. main용 npm 의존성을 추가하면 제외/번들 정책도 바꿔야 한다. 사용자 기록과 CLI 인증은 앱 빌드 입력이 아니다.
 
-패키지의 주요 내용은 `src/`, `characters/`, `skins/`, `assets/`, 렌더러 번들, 라이선스 고지다. `eslint.config.cjs`, `node_modules`, `artifacts`, `dist`, `test`, `scripts`, `docs`, `.git`, package-lock.json과 루트 README/TASKS/AGENTS/.gitignore, renderer.mjs 원본, tray-source.png 생성 원본은 제외한다. 소스 원본은 저장소에 유지한다. 사용자 대화 파일과 CLI 인증 정보는 별도 앱/CLI 데이터 위치에 저장하며 빌드에 넣는 파일이 아니다.
-
-현재 메인 프로세스는 Node/Electron 내장 모듈을 사용하고 렌더러 의존성은 번들에 포함한다. 앞으로 메인 프로세스용 npm 라이브러리를 추가하면 `node_modules` 전체 제외 정책과 백엔드 번들/생산 의존성 포함 방식을 함께 수정해야 한다.
-
-### 다른 OS/CPU를 지정하는 옵션은 현재 없음
-
-현재 `scripts/package.cjs`는 `--staging`과 `--electron-zip-dir <폴더>`를 허용한다. 후자는 해당 버전/OS/CPU의 공식 Electron ZIP 캐시를 사용하는 오프라인 패키징 옵션이다. 잘못된 인수는 앱을 덮어쓰기 전에 거절하며 타깃 OS/CPU 옵션은 지원하지 않는다.
-
-```sh
-# 지원하지 않는 옵션이므로 오류로 종료하며 앱을 생성/교체하지 않음
-npm run package -- --platform=win32 --arch=x64
-```
-
-macOS용은 Mac에서, Windows용은 Windows에서 대상 아키텍처 Node로 빌드하는 것을 기본 절차로 한다. 크로스 빌드·macOS universal·CI 행렬은 별도 스크립트 확장이 필요하다. Packager를 직접 호출하면 프로젝트의 제외 규칙·아이콘·ASAR 설정을 놓칠 수 있으므로 이 가이드의 표준 절차로 대체하지 않는다.
+지원 옵션은 --staging과 --electron-zip-dir 디렉터리다. 후자는 해당 Electron 버전/OS/CPU의 공식 ZIP 캐시로 오프라인 패키징한다. --platform/--arch는 지원하지 않으며 알 수 없는 옵션은 overwrite 전에 거절한다. 대상 OS/CPU에서 해당 Node로 빌드하고 Packager 직접 호출로 프로젝트 제외/서명 규칙을 우회하지 않는다.
 
 ### 버전 관리
 
-| 위치 | 현재 값/역할 |
+| 위치 | 역할 |
 |---|---|
-| package.json / package-lock.json | 프로젝트 `0.1.0-alpha.20` |
-| scripts/package.cjs의 appVersion | 배포 앱 버전 `0.1.0`; 패키지 안의 package.json 버전도 이 값으로 변경됨 |
-| scripts/package.cjs의 buildVersion | 후속 검증용 staging `38`; 기존 일반 실행 경로의 확인값은 `30` |
-| CLI clientInfo | 소스 version과 패키징 시 보존한 onggiProjectVersion 사용: 양쪽 alpha.20 |
+| package.json / package-lock.json | 소스 프로젝트 version |
+| package.json onggiBuildVersion | 새 후보를 구분할 숫자형 빌드 ID. 패키지 metadata/CFBundleVersion과 대조 |
+| scripts/package.cjs appVersion | 배포 앱 버전. packager가 패키지 내부 version을 바꿀 수 있음 |
+| 패키지 onggiProjectVersion / CLI clientInfo | 소스 version을 보존해 앱·연결 식별에 사용 |
 
-프로젝트 version만 변경해도 현재 패키징 버전이 자동으로 따라가는 구조는 아니다. 배포 시 프로젝트·빌드 버전을 함께 확인한다.
+프로젝트/빌드 버전을 함께 확인하고 기존 staging 전체 앱을 보존한 뒤 생성한다. 정적 바이트 대조만으로 실제 ASAR loader·decode·worker·startup 성공까지 표시하지 않는다. 패키지 앱에 --smoke를 붙여 소스 smoke가 실행된다고 가정하지 않는다.
 
-alpha20/build36의 검증·복구 사본은 [최종 후속 결과](history/FINAL_IMPLEMENTATION_RESULT_2026-10-13.md)를 따른다. `ONGGI_PERFORMANCE_DETAIL=1 npm run smoke:performance`는 1/8/16/24/30MiB 저장/읽기·본문 검색과 100/1,000/10,000개 메시지를 계측한다. `ONGGI_TIMING_PERFORMANCE_DETAIL=1 npm run smoke:timing`은 0/1/16/30MiB의 모의 CLI 중단과 해당 렌더러 CPU 프로파일을 수집한다. 두 명령은 실제 모델을 호출하지 않으며 `ONGGI_SMOKE_ROOT`를 실행별 절대 경로로 지정한다.
+## 6. 연결과 배포
 
-## 6. 빌드 후 실제 Codex 연결
+CLI는 앱에 동봉하지 않는다. Mac은 설치된 ChatGPT 앱 내부 CLI도 탐색 후보로 사용하지만 모든 PC에 그 경로가 있는 것은 아니다. 새 PC는 CLI·로그인·작업 폴더를 따로 준비한다. Windows 네이티브와 WSL은 다른 환경이다. [사용자 연결 안내](USER_GUIDE.md#첫-연결)를 따르고 패키징 성공을 인증/모델 성공으로 간주하지 않는다.
 
-Codex CLI는 이 앱에 동봉하지 않는다. Mac에서는 현재 설치된 ChatGPT 앱 안의 CLI도 후보로 탐색하지만, 해당 경로의 존재를 모든 PC에서 보장하지 않는다. 다른 PC에서 실제 대화하려면 해당 환경에서 CLI 설치·로그인을 준비하고 앱 설정의 CLI 실행 파일/작업 폴더를 확인한다.
-
-Windows의 네이티브 CLI와 WSL CLI는 다른 실행 환경이다. CLI 재탐색·로그인 진단·브라우저 로그인 UI를 제공한다. Windows 설치·브라우저 콜백은 실기 미검증이며 [최초 연결 검토](history/FIRST_RUN_REVIEW.md#alpha13build28-연결-복구-적용)를 참고한다.  패키징 성공을 인증·모델 실행 성공으로 간주하지 않는다.
-
-모델 기본값은 `gpt-5.6-luna/high`다. 모델 제공 여부는 실제 CLI와 계정에 따라 확인해야 한다. 체험 응답은 실제 모델 응답과 구분한다.
+macOS 로컬 ad-hoc 서명과 최소 JIT entitlement를 사용한다. Developer ID·공증·Windows 서명·DMG/PKG·Setup.exe/MSI/MSIX·자동 업데이트는 별도 작업이다. 플랫폼별 실제 드래그·투명 클릭·트레이·Snap/DPI·IME·절전/모니터 수용은 [남은 작업](../TASKS.md#실제-환경에서-남은-수용)을 따른다.
 
 ## 7. 자주 막히는 지점
 
-| 현상 | 확인할 내용 |
+| 현상 | 확인 |
 |---|---|
-| Node 엔진 버전 오류 | `node --version`이 22.13 이상(22.x) 또는 24 이상인지 확인. 이 프로젝트는 24.x 환경 검증 |
-| `npm`을 찾을 수 없음 | Node 설치 후 새 터미널에서 확인. PowerShell은 `npm.cmd` 사용 |
-| `ENOTFOUND github.com` / Electron 다운로드 실패 | 네트워크·DNS·조직 프록시와 공식 다운로드 접근 확인. 이미 공식 ZIP이 캐시에 있으면 --electron-zip-dir 사용. TLS 검증을 끄지 않음 |
-| 예상과 다른 CPU 결과물 | `node -p "process.arch"` 확인. 하드웨어가 아니라 Node 아키텍처가 타깃 기준 |
-| ICNS 명령 실패 | macOS에서 실행하고 `sips`·`iconutil` 및 assets/icon.png 확인 |
-| 앱이 다른 PC에서 실행되지 않음 | OS/CPU 일치, Windows 전체 실행 폴더 전달, 패키징 앱 실기 테스트 확인 |
-| 모델 조회·로그인 실패 | 빌드 문제와 별개로 실제 CLI 경로·로그인·네트워크·작업 폴더 확인 |
-| Windows 테스트 CLI 실행 실패 | Node 실행 어댑터·심볼릭 링크 권한 확인. `shell:true` 전환으로 일괄 우회하지 않음 |
-
-## 8. 외부 배포에 아직 필요한 작업
-
-현재 macOS 빌드는 로컬 ad-hoc 서명과 최소 JIT entitlement를 적용한다. 스크립트에는 Developer ID 서명·공증, Windows 코드 서명, DMG/PKG·Setup.exe/MSI/MSIX 생성, 자동 업데이트가 없다. 로컬 앱 묶음 생성과 외부 사용자용 설치·배포 준비는 구분한다. 서명·공증과 플랫폼별 설치 프로그램은 C10/E07/B07의 후속 범위다.
-
-이 문서를 추가하면서 Windows 아이콘 재생성에 적용되던 macOS 전용 템플릿 검증을 플랫폼 조건으로 분리했다. macOS 생성·기본 검증은 수행했고, Windows 명령의 실행 결과는 아직 확인하지 않았다.
-
-## 검증 산출물과 이력
-
-버전별 소스/ASAR 차이·검사 수·서명·복구 사본은 [검토 이력](history/README.md)에 보존한다. 현재 실행 명령과 과거 후보의 검증을 구분한다.
-
-재사용 검사는 `scripts/`에 둔다. 임시 프로필/로그는 `artifacts/`에 기록하며 사용자 원본/복구 백업은 확인 없이 지우지 않는다. build26 전달과 당시 실기 범위는 [과거 빌드 기록](history/BUILD_NOTES_2026-10-08.md)에 보존했다. 현재 소스/staging 검증과 기존 설치본 보존은 [Mac 후속 결과](MAC_FOLLOWUP_RESULT_2026-10-15.md)를 따른다. build30 정리 당시의 기록은 [정리 결과](history/CLEANUP_RESULT_2026-10-10.md)에 유지한다.
+| Node 엔진 오류 / npm 없음 | 지원 Node·새 터미널·PowerShell npm.cmd |
+| Electron 다운로드/DNS 실패 | 공식 다운로드·조직 프록시/DNS. 공식 ZIP 캐시 옵션을 쓰며 TLS 검증을 끄지 않음 |
+| 예상과 다른 CPU | process.arch와 Rosetta/Node 아키텍처 |
+| ICNS 실패 | macOS·sips/iconutil·assets/icon.png |
+| 다른 PC에서 앱 실행 실패 | OS/CPU·폴더 전체 전달·대상 실기 |
+| Windows 테스트 CLI 실패 | Node 어댑터·링크 권한. shell:true로 일괄 우회하지 않음 |
+| 모델/로그인 오류 | 빌드와 분리해 CLI 경로·계정·네트워크·폴더 확인 |
 
 ## 검사 결과와 복구 자료
 
-통합 실행은 `ONGGI_SMOKE_ROOT`를 지정하면 그 위치, 지정하지 않으면 `artifacts/integration-smoke/run-*`의 새 폴더에 결과를 저장한다. 각 사례의 프로필과 JSON/PNG도 해당 실행 안에 둔다. 성공한 프로필은 결과 보존 후 정리하며 실패한 프로필은 남긴다. 결과 JSON은 `sourceHashes`, `scriptHashes`, `fixtureHashes`를 기록한다.
+### 로컬 저장·전환 비용 비교
 
-선택형 기록 계측은 `ONGGI_HISTORY_COST_REVIEW=1`과 `ONGGI_SMOKE_ROOT`로 새 결과 폴더를 지정할 수 있다. 기본 출력은 `artifacts/history-cost`다. `ONGGI_HISTORY_COST_LABEL`은 영문/숫자/하이픈 1~64자다. 이전 날짜별 결과 폴더가 미리 있을 필요는 없다.
+`scripts/store-cost-benchmark.cjs`는 화면과 실제 모델을 사용하지 않는다. before/after 각각 같은 시점의 `package.json`, `src/store.cjs`, `src/store-worker.cjs`와 필요한 로컬 CJS 모듈을 포함한 프로젝트 디렉터리를 지정한다. 단일 과거 Store 파일에 현재 worker를 보충하는 구형 호출 형식은 거절한다. 원본을 수정하지 않고 각 묶음을 임시 폴더에 복제해 실행한다.
 
-플로팅 재시작 검사는 같은 `ONGGI_SMOKE_ROOT`로 `--floating-smoke`, 이어 `--floating-smoke --verify-floating-restore`, 마지막으로 `--floating-smoke --verify-floating-recovery`를 실행한다. 같은 프로필의 첫 검사 결과와 복원 완료를 확인하며 공용 이전 JSON을 대신 읽지 않는다. 세 단계의 프로필은 마지막 결과를 보존한 뒤 정리한다.
+```sh
+node --expose-gc scripts/store-cost-benchmark.cjs \
+  --before artifacts/engineering-2026-10-28/before \
+  --after . \
+  --output artifacts/engineering-2026-10-28/comparison-new.json \
+  --sizes 1,30 --samples 20 --warmup 3 --instrumentation off,on
+```
 
-과거 앱·캐시·일회성 검사 원본의 [복구 압축본](../artifacts/legacy-cleanup-2026-10-12/cleanup-targets.tar.gz)과 [원래 경로/파일/링크/해시](../artifacts/legacy-cleanup-2026-10-12/removal-manifest.json)를 함께 사용한다. 새 빈 폴더에서 필요한 항목을 복원·대조하고 현재 작업 파일을 일괄 덮어쓰지 않는다. 실행·검증 범위는 [정리 결과](history/LEGACY_FILE_CLEANUP_RESULT_2026-10-12.md)를 따른다.
+예시 before는 해당 실행의 로컬 snapshot이며 다른 checkout에는 없을 수 있다. 비교할 소스 묶음을 먼저 보존하고 상위 폴더가 존재하는 새 출력 파일 경로를 지정한다. 출력 파일이 이미 있으면 거절한다. `--cases`로 `constructor,read,unchanged,settings,first-worker,warm-worker,open-other,open-same,new` 중 선택하고, `--shapes long,short`로 메시지 형태를 나눈다. 기본은 long이다. `--sizes`는 목표 MiB이며 실제 JSON bytes·개수·fixture hash를 결과에서 확인한다. `--timeout-ms`, `--grace-ms`는 측정 runner의 watchdog/종료 유예이며 제품 저장 timeout이 아니다.
 
-alpha22의 추가 계측은 `artifacts/mac-followup-2026-10-15/`에 원자료·스크립트·실패 로그와 함께 보존한다. Store/첨부/원격 Node 벤치는 각각 `store-benchmark/benchmark.cjs`, `attachment-benchmark/benchmark.cjs --run`, `remote-benchmark/paging-benchmark.cjs`로 재현한다. 실제 이미지 검증은 `image-benchmark/image-cost-benchmark.cjs`를 Node로 실행하면 격리 Electron 자식을 순차 실행한다. 다른 대량 시험과 겹치지 않게 실행한다.
+계측 off/on은 별도 child, before/after는 표본마다 교차 순서다. 준비·정답 확인·정리는 측정 구간 밖이다. 첫 worker와 warm worker 비용을 구분하고 실제 결과가 맞아야 성공 표본으로 남긴다. 상세 stage는 중첩된 inclusive 시간이라 합산하지 않는다. RSS 양 끝값/heap delta는 peak/retained가 아니며, write payload bytes는 물리 쓰기량이 아니다. Node 합성 결과를 Electron 화면·실기 입력·배터리·cold I/O 개선으로 확대하지 않는다. 도구 기능 테스트의 작은 표본은 성능 채택 근거로 사용하지 않는다.
 
-자원 스크립트는 표본별 전원 출처와 유휴 상태, 실제 발생한 잠금·절전·AC 이벤트를 함께 기록한다. `ONGGI_RESOURCE_BUDDY_PROFILES=1`은 정숙·일상 상태를 추가한다. 이벤트를 관찰했다고 그 전환의 정상 복귀를 검증한 것은 아니다. `ONGGI_NATIVE_CLIPBOARD_REVIEW=1` 확장 검사는 현재 OS 클립보드를 읽고 임시 변경 후 복원하므로 구체적 사용자 승인 아래에서만 실행한다. 복원 확인은 OS write 완료이며 원본 payload 재읽기 대조는 포함하지 않는다.
+v3의 `controlCallbackMs`는 작업 직전에 예약한 첫 callback의 실제 도착 지연이다. 비동기 작업 전체의 최대 정지나 실제 UI 입력 지연과 다르다. `eventLoopMaxMs`는 샘플 누락으로 긴 동기 차단을 놓칠 수 있어 단독 main 차단 수용 지표로 쓰지 않는다. 결과 `status: passed`는 정합성/수집 성공이며 성능 관문의 통과가 아니다. [첫 실행의 반대 신호와 수용 보류](history/ENGINEERING_REASSESSMENT_2026-10-28.md)를 함께 확인한다.
+
+v4는 원인 분리용 `--expectations before|after`와 `--reverse-slots`를 추가했다. 기본 before는 두 기대값 객체를 측정 전에 만들고, after는 작업·callback 계측 뒤에 만들어 같은 내용 검증을 수행한다. fixture 문자열은 두 조건 모두 살아 있다. `setup`에는 준비 단계별 시간과 메모리, 명시적 GC 전후 상태가 담긴다. `runnerSlot`은 fork 순서이며 CPU 고정을 의미하지 않는다. reverse-slots는 요청 AB/BA 순서를 바꾸지 않는다. 기대값 수명·프로세스 순서가 다른 결과를 제품 최적화로 해석하지 않으며, 자연 GC·OS 스케줄링 원인은 이 도구만으로 확정할 수 없다. 실험 전 횟수·대조·중단 기준을 정하고 기존 원자료를 보존한다.
+
+### 캐시 publish 비용 탐색
+
+`scripts/cache-cost-benchmark.cjs`는 임시 프로필에서 신규/중복 파일·이미지 1·8개와 파일→이미지→파일 순서를 검사한다. 기본 실행은 작은 기능 smoke다. 예를 들어 아래는 각 root의 기존 파일 수를 늘리는 **단일 표본 탐색**이며 성능 비교나 p95 수용 검사가 아니다.
+
+```sh
+node scripts/cache-cost-benchmark.cjs \
+  --files 0,1000,10000 \
+  --cases new-file-1,new-file-8,duplicate-file-8,mixed \
+  --samples 1 --bytes 65536 --instrumentation on \
+  --output artifacts/cache-exploration.json
+```
+
+출력의 상위 폴더를 먼저 준비하고 새 파일명을 쓴다. `--instrumentation off`는 상세 probe를 끈 별도 실행이다. 제품 파일 4개의 hash와 도구/fixture hash, 결과 bytes·기존 파일 보존을 검증하고, 임시 폴더 정리가 끝난 뒤에만 결과를 기록한다. 제품 파일을 동시에 수정하지 않는다.
+
+prepare/verify/hash/read/link/cleanup/staging 시간은 중첩되므로 더하지 않는다. 첫 callback은 비동기 작업 뒤쪽의 최대 정지를 보장하지 않는다. 이미지 validator는 source를 preview로 쓰는 fixture여서 실제 decode·축소 비용을 포함하지 않고, 중복 이미지 검증은 같은 Store에서 준비한 warm cache다. 준비 단계에서 기존 파일을 읽으므로 cold I/O도 아니다. RSS 양 끝값과 성공 write payload bytes를 peak 메모리나 물리 디스크 쓰기량으로 표현하지 않는다. 안전성 race·quota 경계 검증은 기존 `test/cache-quota.test.cjs`와 첨부/이미지 회귀를 함께 유지한다.
+
+재사용 검사기는 scripts/에 두고 임시 결과는 artifacts/에 보존한다. 이전 버전의 개인 경로·일회성 벤치·성공/실패·자원 표본은 [이력 색인](history/README.md)을 따른다. 날짜별 환경이 다른 표본을 직접 성능 개선율로 비교하지 않는다.
+
+과거 일회성 코드/앱의 [복구 압축본](../artifacts/legacy-cleanup-2026-10-12/cleanup-targets.tar.gz)과 [경로/파일/링크/hash 목록](../artifacts/legacy-cleanup-2026-10-12/removal-manifest.json)을 함께 사용한다. 새 빈 폴더에 필요한 항목만 복원·대조하고 현재 작업 파일·사용자 원본·백업을 일괄 덮어쓰거나 지우지 않는다.

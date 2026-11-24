@@ -7,9 +7,11 @@ module.exports=async({app,pet,panel,store,codex,personaLibrary,skins})=>{
     const artifactRoot=path.resolve(process.env.ONGGI_SMOKE_ROOT??path.join(__dirname,'..','artifacts'));fs.mkdirSync(artifactRoot,{recursive:true});
     await panel.webContents.executeJavaScript(`(async()=>{await window.onggi.action('settings',{chatMode:'panel',skinId:'paper'});await window.onggi.action('show-panel',{tab:'chat',full:true});})()`);
     await panel.webContents.executeJavaScript(`window.onggi.action('refresh-models')`);
+    await codex.request('test/hold',{enabled:true});
     for(const character of ['onggi-clip','onggi-sprout'])for(const mode of ['friendly','warm-long','concise','blunt']){
       const prompt=`${character} / ${mode}: 책상 정리 방법을 알려줘.`;
       await panel.webContents.executeJavaScript(`(async()=>{await window.onggi.action('select-character',{id:${JSON.stringify(character)}});await window.onggi.action('persona-settings',{characterId:${JSON.stringify(character)},mode:${JSON.stringify(mode)}});await window.onggi.action('send',{text:${JSON.stringify(prompt)}});})()`);
+      const pending=store.data.messages.at(-1),started=Date.now()+10000;while(Date.now()<started&&!pending.turnId)await new Promise(resolve=>setTimeout(resolve,20));if(!pending.turnId)throw Error('Persona fixture turn did not start');await codex.request('test/complete-current',{});
       const deadline=Date.now()+10000;while(Date.now()<deadline&&store.data.messages.at(-1)?.status!=='completed')await new Promise(r=>setTimeout(r,30));
       const reply=store.data.messages.at(-1),remote=await codex.request('thread/read',{threadId:store.data.threadId,includeTurns:true}),turn=remote.thread.turns.at(-1),expected=personaLibrary.resolve(character,mode,store.data.settings.buddyName);
       if(reply.status!=='completed'||reply.persona.hash!==expected.hash||turn.personaInstructions!==expected.instructions||turn.items[0].content[0].text!==prompt)throw Error('Persona/prompt snapshot failed '+character+'/'+mode);
@@ -26,24 +28,42 @@ module.exports=async({app,pet,panel,store,codex,personaLibrary,skins})=>{
       return{draftPreserved,saved:document.querySelector('#persona-editor-status').textContent.includes('저장했어요')};
     })()`);
     if(!editor.draftPreserved||!editor.saved||!personaLibrary.read('onggi-sprout','base').text.includes('EDITOR_MARKER'))throw Error('Markdown editor save/draft failed');
-    await panel.webContents.executeJavaScript(`(async()=>{document.querySelector('#persona-text').value=${JSON.stringify(base)};document.querySelector('#persona-editor-form').requestSubmit();await new Promise(r=>setTimeout(r,150));document.querySelector('[data-tab="chat"]').click();})()`);
+    const baseRestored=await panel.webContents.executeJavaScript(`(async()=>{const input=document.querySelector('#persona-text');input.value=${JSON.stringify(base)};document.querySelector('#persona-editor-form').requestSubmit();const deadline=Date.now()+5000;while(Date.now()<deadline&&!document.querySelector('#persona-editor-status').textContent.includes('저장했어요'))await new Promise(r=>setTimeout(r,25));return input.value===${JSON.stringify(base)}&&document.querySelector('#persona-editor-status').textContent.includes('저장했어요');})()`);
+    if(!baseRestored||personaLibrary.read('onggi-sprout','base').text!==base)throw Error('Markdown editor base restore failed');
+    await panel.webContents.executeJavaScript(`document.querySelector('[data-tab="chat"]').click()`);
     const frozen=await panel.webContents.executeJavaScript(`(async()=>{
       await window.onggi.action('select-character',{id:'onggi-clip'});await window.onggi.action('persona-settings',{characterId:'onggi-clip',mode:'friendly'});await window.onggi.action('send',{text:'첫 질문'});
       await window.onggi.action('persona-settings',{characterId:'onggi-clip',mode:'concise'});const queued=await window.onggi.action('send',{text:'큐에 들어간 질문'});
-      await window.onggi.action('persona-save',{characterId:'onggi-clip',id:'concise',text:${JSON.stringify(original+'\n편집된 규칙: SNAPSHOT_EDIT 표식을 포함한다.')}});return queued.id;
+      await window.onggi.action('persona-save',{characterId:'onggi-clip',id:'concise',expectedHash:${JSON.stringify(personaLibrary.read('onggi-clip','concise').contentHash)},text:${JSON.stringify(original+'\n편집된 규칙: SNAPSHOT_EDIT 표식을 포함한다.')}});return queued.id;
     })()`);
+    const queuedIndex=store.data.messages.findIndex(message=>message.id===frozen);
+    for(const reply of [store.data.messages[queuedIndex-1],store.data.messages[queuedIndex+1]]){
+      let deadline=Date.now()+10000;while(Date.now()<deadline&&!reply.turnId)await new Promise(resolve=>setTimeout(resolve,20));if(!reply.turnId)throw Error('Queued persona fixture turn did not start');
+      await codex.request('test/complete-current',{});deadline=Date.now()+10000;while(Date.now()<deadline&&(reply.status!=='completed'||store.saving))await new Promise(resolve=>setTimeout(resolve,20));if(reply.status!=='completed'||store.saving)throw Error('Queued persona fixture turn did not finish');
+    }
     let deadline=Date.now()+10000;while(Date.now()<deadline&&store.data.messages.find(m=>m.id===frozen)?.status!=='completed')await new Promise(r=>setTimeout(r,30));
     const remote=await codex.request('thread/read',{threadId:store.data.threadId,includeTurns:true});
     if(remote.thread.turns.at(-1).personaInstructions.includes('SNAPSHOT_EDIT'))throw Error('Queued persona changed after submission');
     await panel.webContents.executeJavaScript(`window.onggi.action('send',{text:'편집 후 질문'})`);
+    const pending=store.data.messages.at(-1),started=Date.now()+10000;while(Date.now()<started&&!pending.turnId)await new Promise(resolve=>setTimeout(resolve,20));if(!pending.turnId)throw Error('Edited persona fixture turn did not start');await codex.request('test/complete-current',{});
     deadline=Date.now()+10000;while(Date.now()<deadline&&store.data.messages.at(-1)?.status!=='completed')await new Promise(r=>setTimeout(r,30));
     const edited=await codex.request('thread/read',{threadId:store.data.threadId,includeTurns:true});if(!edited.thread.turns.at(-1).personaInstructions.includes('SNAPSHOT_EDIT'))throw Error('Edited MD was not applied');
+    await codex.request('test/hold',{enabled:false});
     for(const skin of skins){
       await panel.webContents.executeJavaScript(`window.onggi.action('settings',{skinId:${JSON.stringify(skin.id)},chatMode:'bubble'})`);
       await panel.webContents.executeJavaScript(`window.onggi.action('show-panel',{tab:'chat'})`);
       await new Promise(r=>setTimeout(r,120));
       const layout=await panel.webContents.executeJavaScript(`({compact:document.body.classList.contains('compact-mode'),headerHidden:getComputedStyle(document.querySelector('.header')).display==='none',tail:getComputedStyle(document.querySelector('#panel-surface'),'::after').content!=='none',skin:document.body.dataset.skin,composerVisible:document.querySelector('#composer').getBoundingClientRect().bottom<innerHeight,width:innerWidth,height:innerHeight,visibleMessages:[...document.querySelectorAll('.message')].filter(m=>getComputedStyle(m).display!=='none').length,assistantOnly:[...document.querySelectorAll('.message')].every(card=>card.classList.contains('assistant')),replyId:document.querySelector('.message')?.dataset.id,background:getComputedStyle(document.querySelector('.panel-shell')).backgroundColor})`);
       if(!layout.compact||!layout.headerHidden||!layout.tail||!layout.composerVisible||layout.visibleMessages!==1||!layout.assistantOnly||layout.replyId!==store.data.messages.at(-1).id||layout.width!==360||layout.height>410||layout.height<200||layout.skin!==skin.id)throw Error('Mini bubble layout failed '+JSON.stringify(layout));
+      const shapes=await panel.webContents.executeJavaScript(`({radius:getComputedStyle(document.querySelector('.panel-shell')).borderTopLeftRadius,tail:getComputedStyle(document.querySelector('#panel-surface'),'::after').backgroundColor,field:getComputedStyle(document.querySelector('#composer')).backgroundColor})`);
+      const background='rgb('+skin.colors.cream.slice(1).match(/../g).map(hex=>parseInt(hex,16)).join(', ')+')';
+      if(layout.background!==background||shapes.tail!==background||shapes.radius!==(skin.id==='classic'?'6px':'18px'))throw Error('Skin round-trip shapes failed '+JSON.stringify({skin:skin.id,layout,shapes}));layout.shapes=shapes;
+      if(skin.id==='classic'){
+        const notice=require('electron').BrowserWindow.getAllWindows().find(window=>window.webContents.getURL().endsWith('/notice.html'));
+        if(!notice)throw Error('Separate notice window missing');
+        const noticeStyle=await notice.webContents.executeJavaScript(`({skin:document.body.dataset.skin,radius:getComputedStyle(document.querySelector('#notice-bubble')).borderTopLeftRadius})`);
+        if(noticeStyle.skin!=='classic'||noticeStyle.radius!=='6px')throw Error('Classic notice skin failed '+JSON.stringify(noticeStyle));layout.notice=noticeStyle;
+      }
       const alignment=await panel.webContents.executeJavaScript(`(()=>{const b=s=>document.querySelector(s).getBoundingClientRect(),title=b('#mini-buddy-title'),composer=b('#composer'),model=b('.model-bar'),close=b('#close-mini'),input=b('#prompt'),send=b('#send'),persona=b('#persona-select'),plus=b('#composer-menu-toggle'),toggle=b('#model-menu-toggle');const label=document.querySelector('#model-menu-label'),option=document.querySelector('#persona-select').selectedOptions[0],oldLabel=label.textContent,oldOption=option.textContent,stop=document.querySelector('#stop'),oldHidden=stop.hidden;label.textContent='A very long model name that must not cover the send button';option.textContent='상냥한 장문 모드';stop.hidden=false;const boxes=[...document.querySelectorAll('#persona-select,#composer-menu-toggle,#model-menu-toggle,#stop,#send')].map(e=>e.getBoundingClientRect()),longNamesFit=boxes.every((r,i)=>r.left>=composer.left&&r.right<=composer.right&&(!i||r.left>=boxes[i-1].right))&&boxes.at(-1).width===send.width;label.textContent=oldLabel;option.textContent=oldOption;stop.hidden=oldHidden;return{longNamesFit,sharedLeft:Math.abs(title.left-composer.left)<1&&Math.abs(model.left-input.left)<1,sharedRight:Math.abs(close.right-composer.right)<1&&Math.abs(send.right-input.right)<1,controlHeightsEqual:Math.abs(persona.height-toggle.height)<1,sameLine:Math.abs(persona.top-toggle.top)<1,plusBetweenPersonaAndModel:persona.right<=plus.left&&plus.right<=toggle.left&&plus.width>=32,personaLeftModelRight:persona.right<=toggle.left&&Math.abs(toggle.right-model.right)<1&&toggle.right<=send.left&&document.querySelector('#composer').contains(document.querySelector('#persona-select')),noHorizontalOverflow:document.querySelector('.panel-shell').scrollWidth<=document.querySelector('.panel-shell').clientWidth};})()`);
       if(!Object.values(alignment).every(Boolean))throw Error('Mini alignment failed '+JSON.stringify(alignment));layout.alignment=alignment;
       fs.writeFileSync(path.join(artifactRoot,'buddy-mini-'+skin.id+'.png'),(await panel.webContents.capturePage()).toPNG());results.push({skin:skin.id,layout});
@@ -63,9 +83,9 @@ module.exports=async({app,pet,panel,store,codex,personaLibrary,skins})=>{
     if(!expanded.full||expanded.draft!=='미니에서 작성한 초안'||expanded.width!==460||store.data.threadId!==thread||store.data.messages.length!==count)throw Error('Bubble expand lost history or draft');
     const reloaded=new Store(store.directory,{});if(reloaded.data.settings.skinId!==store.data.settings.skinId)throw Error('Skin persistence failed');
     if(reloaded.data.settings.chatMode!=='bubble'||reloaded.data.settings.personaModes['onggi-clip']!=='concise'||reloaded.data.settings.personaModes['onggi-sprout']!=='blunt')throw Error('Per-character preferences failed');
-    personaLibrary.save('onggi-clip','concise',original);restored=true;
-    fs.writeFileSync(path.join(artifactRoot,'buddy-features-smoke.json'),JSON.stringify({verifiedAt:new Date().toISOString(),status:'passed',platform:process.platform,results,editor,bubbleFollowsPet:true,focusPreserved:true,queueSnapshot:true,editedMdApplied:true,expanded,historyPreserved:true,persisted:true,realModel:false,personaRestored:true},null,2));
+    personaLibrary.save('onggi-clip','concise',original,personaLibrary.read('onggi-clip','concise').contentHash);restored=true;
+    fs.writeFileSync(path.join(artifactRoot,'buddy-features-smoke.json'),JSON.stringify({verifiedAt:new Date().toISOString(),status:'passed',platform:process.platform,results,editor,bubbleFollowsPet:true,focusPreserved:true,queueSnapshot:true,editedMdApplied:true,expanded,historyPreserved:true,persisted:true,realModel:false,personaRestored:true,fixtureCompletion:'explicit-owned-turn'},null,2));
     console.log('BUDDY_SKINS_MINI_AND_PERSONA_MATRIX_OK');app.quit();
   }catch(error){console.error(error.stack);codex.stop();app.exit(1);}
-  finally{if(!restored)try{personaLibrary.save('onggi-clip','concise',original);}catch(error){console.error('BUDDY_PERSONA_RESTORE_FAILED',error);app.exit(1);}}
+  finally{if(!restored)try{personaLibrary.save('onggi-clip','concise',original,personaLibrary.read('onggi-clip','concise').contentHash);}catch(error){console.error('BUDDY_PERSONA_RESTORE_FAILED',error);app.exit(1);}}
 };

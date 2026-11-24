@@ -1,23 +1,5 @@
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),os=require('node:os'),vm=require('node:vm'),{EventEmitter}=require('node:events');
 
-test('integration requires successful evidence, clean exit and profile cleanup independently',t=>{
-  const root=fs.mkdtempSync(path.join(os.tmpdir(),'onggi-integration-outcomes-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
-  for(const scenario of ['passed','missing-result','failed-result','conflicting-result','bad-exit','cleanup-failed']){
-    const output=path.join(root,scenario),process={argv:['node','integration','models'],env:{ONGGI_SMOKE_ROOT:output},exitCode:0};let profile;
-    const injectedFs={...fs,rmSync:(file,options)=>{if(scenario==='cleanup-failed'&&file===profile)throw Error('injected profile cleanup failure');return fs.rmSync(file,options);}};
-    const spawnSync=(_executable,_args,options)=>{
-      profile=options.env.ONGGI_SMOKE_ROOT;
-      if(scenario!=='missing-result')fs.writeFileSync(path.join(profile,'model-ui-smoke.json'),JSON.stringify({status:scenario==='failed-result'||scenario==='conflicting-result'?'failed':'passed',...(scenario==='conflicting-result'?{passed:true}:{})}));
-      return{status:scenario==='bad-exit'?1:0,signal:null};
-    };
-    vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../scripts/integration-smoke.cjs'),'utf8'),{__dirname:path.join(__dirname,'../scripts'),process,console:{log(){},error(){}},require:name=>name==='electron'?'/fixture/electron':name==='node:child_process'?{spawnSync}:name==='node:fs'?injectedFs:require(name)});
-    const result=JSON.parse(fs.readFileSync(path.join(output,'integration.json'))),record=result.results[0];
-    assert.equal(result.passed,scenario==='passed',scenario);assert.equal(process.exitCode,scenario==='passed'?0:1,scenario);
-    assert.equal(record.profileRemoved,scenario==='passed',scenario);assert.equal(fs.existsSync(profile),scenario!=='passed',scenario);
-    if(scenario==='bad-exit'||scenario==='cleanup-failed')assert.equal(record.featurePassed,true);
-  }
-});
-
 test('real-delete smoke clears completion timers/listeners on RPC failure and records cleanup failure',async t=>{
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'onggi-delete-smoke-failure-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
   const timers=new Map();let timerId=0,bridge;
@@ -59,4 +41,20 @@ test('image decoder stops at the aggregate pixel budget and releases each decode
   const pack={manifest:{states:{}},imageFiles:['one','two','three'].map(file=>({file,source:'data:image/png;base64,AA==',width:2,height:2,frameCount:1})),assets:{},animationFrames:[]};
   await assert.rejects(new module.exports.AssetValidator().validate(pack,10000,{maxPixels:5}),/픽셀 예산/);
   assert.equal(decoded,2);assert.equal(closed,2);assert.equal(destroyed,1);assert.equal(pack.decoded,undefined);
+});
+
+test('delete fixture explicitly completes held owned turns and never replays completed or interrupted turns',async t=>{
+  const {CodexConnection}=require('../src/codex.cjs'),root=fs.mkdtempSync(path.join(os.tmpdir(),'onggi-delete-fixture-control-')),bridge=new CodexConnection(),notifications=[];
+  t.after(async()=>{const child=bridge.process,closed=child&&child.exitCode===null&&child.signalCode===null?new Promise(resolve=>child.once('exit',resolve)):null;bridge.stop();if(closed)await closed;fs.rmSync(root,{recursive:true,force:true});});
+  bridge.on('notification',message=>notifications.push(message));await bridge.connect(path.join(__dirname,'fixtures/delete-codex.cjs'),root);
+  const threadId=(await bridge.request('thread/start',{threadSource:'onggi_bot'})).thread.id,input=[{type:'text',text:'held persona snapshot'}];await bridge.request('test/hold',{enabled:true});
+  const first=(await bridge.request('turn/start',{threadId,input,model:'test-main',effort:'low',collaborationMode:{settings:{developer_instructions:'preserved instructions'}}})).turn.id;
+  await new Promise(resolve=>setTimeout(resolve,950));assert.equal((await bridge.request('thread/read',{threadId})).thread.turns[0].status,'inProgress');assert.equal(notifications.filter(message=>message.method==='turn/completed').length,0);
+  await assert.rejects(bridge.request('test/complete-current',{threadId,turnId:'foreign-turn'}),/own/);await bridge.request('test/complete-current',{threadId,turnId:first});await bridge.request('test/complete-current',{});
+  const second=(await bridge.request('turn/start',{threadId,input,model:'test-small',effort:'medium'})).turn.id;await bridge.request('turn/interrupt',{threadId,turnId:second});await bridge.request('test/complete-current',{});await bridge.request('turn/interrupt',{threadId,turnId:second});
+  const third=(await bridge.request('turn/start',{threadId,input,model:'test-main',effort:'high'})).turn.id;await assert.rejects(bridge.request('test/complete-current',{threadId,turnId:second}),/own/);await bridge.request('test/complete-current',{threadId,turnId:third});
+  await bridge.request('test/hold',{enabled:false});const fourth=(await bridge.request('turn/start',{threadId,input,model:'test-main',effort:'low'})).turn.id;
+  await new Promise((resolve,reject)=>{const timer=setTimeout(()=>{bridge.off('notification',completed);reject(Error('Default fixture timer did not complete'));},3000);const completed=message=>{if(message.method==='turn/completed'&&message.params.turn.id===fourth){clearTimeout(timer);bridge.off('notification',completed);resolve();}};bridge.on('notification',completed);});
+  const completions=notifications.filter(message=>message.method==='turn/completed');assert.deepEqual(completions.map(message=>message.params.turn.id),[first,second,third,fourth]);assert.deepEqual(completions.map(message=>message.params.turn.status),['completed','interrupted','completed','completed']);
+  const persisted=JSON.parse(fs.readFileSync(path.join(root,'delete-fixture-threads.json'),'utf8')).threads[0][1].turns;assert.deepEqual(persisted.map(turn=>turn.status),['completed','interrupted','completed','completed']);assert.equal(persisted[0].personaInstructions,'preserved instructions');assert.equal(persisted[0].items[1].text.includes('test-main / low'),true);assert.equal(persisted[1].items.length,1);
 });

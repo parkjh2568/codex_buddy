@@ -4,7 +4,7 @@
 
 현재 구조는 [ARCHITECTURE](../ARCHITECTURE.md), 검증과 전달 범위는 [ALPHA_REPORT](../ALPHA_REPORT.md)를 따른다. 완료한 A/C/D/E/P/G/W 작업의 날짜별 검사 수·환경·실패 근거는 [기존 작업 이력](TASKS_BEFORE_CLEANUP_2026-10-10.md)과 [검토 이력](README.md)에 보존했다.
 
-[2026-10-14 남은 작업과 완료 기준](REMAINING_WORK_REPORT_2026-10-14.md)은 이전 분석 기준이다. alpha21의 UI·읽기 보강은 [당시 결과](REMAINING_IMPLEMENTATION_RESULT_2026-10-14.md)에 유지한다. 최신 [Mac 후속 결과](../MAC_FOLLOWUP_RESULT_2026-10-15.md)는 alpha22/build38의 state/저널 읽기·첨부 수명·원격 단계 조회와 자동 검증을 기록한다. 단위 190개·Electron 15종·패키지 85개 파일·strict 로컬 서명·격리 패키지 실행을 통과했다. 직전 build37 전체 앱과 기준 소스 194개는 해당 결과의 복구 자료로 보존한다.
+[2026-10-14 남은 작업과 완료 기준](REMAINING_WORK_REPORT_2026-10-14.md)은 이전 분석 기준이다. alpha21의 UI·읽기 보강은 [당시 결과](REMAINING_IMPLEMENTATION_RESULT_2026-10-14.md)에 유지한다. 최신 [Mac 후속 결과](MAC_FOLLOWUP_RESULT_2026-10-15.md)는 alpha22/build38의 state/저널 읽기·첨부 수명·원격 단계 조회와 자동 검증을 기록한다. 단위 190개·Electron 15종·패키지 85개 파일·strict 로컬 서명·격리 패키지 실행을 통과했다. 직전 build37 전체 앱과 기준 소스 194개는 해당 결과의 복구 자료로 보존한다.
 
 ## 현재 구현
 
@@ -14,8 +14,8 @@
 | M01–M07 / G1–G4 | 이미지 decode·대비·표시 정책·상태·MD 관리·팩 수명·활성 자산 계약 구현. 상세 규격은 캐릭터/구조 문서 |
 | M08–M09 / G5 | v1/v2 눈 깜빡임과 35/50/65% 배율 구현. Windows/DPI·OS 실기 수용은 후속 |
 | W00–W10 | 재현 결함 수정·해당 시점 회귀 기록은 [2026-10-08 수정 결과](ISSUE_REMEDIATION_RESULT_2026-10-08.md) |
-| 연결 복구·로그인 안내·생성 이미지 | 구현. [적용 기록](../CONNECTION_AND_IMAGES_2026-10-08.md)의 모의/실제 범위 구분 |
-| 이미지/파일 첨부·로컬 FIFO | 구현. [적용 기록](../ATTACHMENTS_AND_QUEUE_2026-10-10.md)의 사본 보관·순서·한도 유지 |
+| 연결 복구·로그인 안내·생성 이미지 | 구현. [적용 기록](CONNECTION_AND_IMAGES_2026-10-08.md)의 모의/실제 범위 구분 |
+| 이미지/파일 첨부·로컬 FIFO | 구현. [적용 기록](ATTACHMENTS_AND_QUEUE_2026-10-10.md)의 사본 보관·순서·한도 유지 |
 | 보관량·참조 조회와 캐시 복구 보관/복원 | 구현. 미참조·불변 해시만 명시적 선택하며 공유 참조·외부 변경·부분 실패·중단·복원 충돌·용량 한도 검사 |
 | 제한된 기록 읽기·대화/설정 UI | alpha21 구현. `readHistory`의 제한된 FD 읽기·변경 감지, 말투 옆 `+`, 답변 중심 심플 화면·보호 해제 후 30초 숨김, 상세 4모서리 조절·실행 중 bounds 보존 |
 | 불필요 내용 정리 | 완료: 당시 소스 정리·검증과 staging build30 생성. 당시 전달·보존 기록은 [제거 계획](CLEANUP_PLAN_2026-10-10.md)과 [실행 결과](CLEANUP_RESULT_2026-10-10.md). 현재 실행 묶음은 ALPHA_REPORT 기준 |
@@ -33,7 +33,7 @@
 
 ## 최초 설치·연결 편의성 검토
 
-구현과 실제 계정·플랫폼 검증을 구분한다. 현재 사용법은 [최초 연결](../FIRST_RUN_REVIEW.md)에 모았다.
+구현과 실제 계정·플랫폼 검증을 구분한다. 현재 사용법은 [최초 연결](DOCUMENTATION_BEFORE_CLEANUP_2026-10-21.md#first_run_review)에 모았다.
 
 | ID | 남은 작업 또는 수용 조건 | 상태 |
 |---|---|---|
@@ -51,7 +51,7 @@ O09의 프로젝트 버전/clientInfo·ASAR·워커 일관성은 구현돼 완�
 
 ## 버디 기능 확장 결과
 
-[BUD00–BUD09와 O01/O04/O08 기능 도입 기록](BUDDY_EXPANSION_RESULT_2026-10-10.md), [alpha17 수정·재검토](QUALITY_CYCLE_RESULT_2026-10-10.md), [alpha18 후속 결과](BUDDY_FOLLOWUP_RESULT_2026-10-10.md)를 따른다. 확정한 우선순위·무료 에셋 11개 사이트 판단·조건부 기능은 [작업 계획](../BUDDY_ROADMAP_2026-10-10.md)에 유지한다. 최신 개발 소스와 검증 후보는 alpha22/build38이다. 직전 alpha21/build37은 `artifacts/mac-followup-2026-10-15/baseline-app37.app`에 보존한다. 이전 alpha20/staging build36과 일반 실행 alpha14/build30·rollback alpha17/build33은 복구 자료로 보존한다. alpha18/build34·초기 alpha19/build35는 [최종 후속 결과의 검증 복구 사본](FINAL_IMPLEMENTATION_RESULT_2026-10-13.md)에 보존했다. build31/build32는 [2026-10-12 정리 복구본](../../artifacts/legacy-cleanup-2026-10-12/cleanup-targets.tar.gz)에 보관했다.
+[BUD00–BUD09와 O01/O04/O08 기능 도입 기록](BUDDY_EXPANSION_RESULT_2026-10-10.md), [alpha17 수정·재검토](QUALITY_CYCLE_RESULT_2026-10-10.md), [alpha18 후속 결과](BUDDY_FOLLOWUP_RESULT_2026-10-10.md)를 따른다. 확정한 우선순위·무료 에셋 11개 사이트 판단·조건부 기능은 [작업 계획](BUDDY_ROADMAP_2026-10-10.md)에 유지한다. 최신 개발 소스와 검증 후보는 alpha22/build38이다. 직전 alpha21/build37은 `artifacts/mac-followup-2026-10-15/baseline-app37.app`에 보존한다. 이전 alpha20/staging build36과 일반 실행 alpha14/build30·rollback alpha17/build33은 복구 자료로 보존한다. alpha18/build34·초기 alpha19/build35는 [최종 후속 결과의 검증 복구 사본](FINAL_IMPLEMENTATION_RESULT_2026-10-13.md)에 보존했다. build31/build32는 [2026-10-12 정리 복구본](../../artifacts/legacy-cleanup-2026-10-12/cleanup-targets.tar.gz)에 보관했다.
 
 | ID | 구현 상태 | 남은 수용 조건 |
 |---|---|---|
@@ -68,9 +68,9 @@ O09의 프로젝트 버전/clientInfo·ASAR·워커 일관성은 구현돼 완�
 
 alpha18은 단위 126개·격리 Electron 14종·패키지 84개 파일을 통과했다. 실제 클립보드와 추가 계측을 포함한 확장/성능 2종도 마지막 스크립트 보강 후 재검증했다. 인증 수명·페이지 부분 실패/저장 실패·내보내기 순서와 기존 R01–R13 회귀를 확인했다. 실제 모델 질문은 추가하지 않았다. alpha17의 단위 117개·Electron 14종은 당시 결과에 유지한다. 이전 실제 CLI 및 모델 검사의 시점은 기능 도입 기록을 따른다. 로컬 ad-hoc 서명은 Developer ID/공증/외부 배포 준비를 대신하지 않는다.
 
-시작한 문제·전제·최근 공식 제품과의 비교·라이브러리 선택 이유는 [제품 방향 검토](../BUDDY_PRODUCT_REVIEW_2026-10-10.md)를 따른다. 현재 사용자의 UI 요청은 아래 UX01–UX09에 정리했다. O05/O10의 최초 연결 실사용과 C07–C09의 같은 환경 자원·긴 기록 평가는 후속 수용으로 유지한다. steering·자동 기억·음성·상시 수집은 기존 착수 조건을 유지한다.
+시작한 문제·전제·최근 공식 제품과의 비교·라이브러리 선택 이유는 [제품 방향 검토](BUDDY_PRODUCT_REVIEW_2026-10-10.md)를 따른다. 현재 사용자의 UI 요청은 아래 UX01–UX09에 정리했다. O05/O10의 최초 연결 실사용과 C07–C09의 같은 환경 자원·긴 기록 평가는 후속 수용으로 유지한다. steering·자동 기억·음성·상시 수집은 기존 착수 조건을 유지한다.
 
-이를 실행 단위로 나눈 [후속 분석·작업계획](../BUDDY_FOLLOWUP_PLAN_2026-10-10.md)에 우선순위·대상 코드·예외·측정·완료 조건을 정리했다. [실행 결과](BUDDY_FOLLOWUP_RESULT_2026-10-10.md)에서 완료한 수정/계측과 새 계정·OS 화면·플랫폼/배터리의 남은 수용을 구분한다. 기존 R09–R13/O11은 완료 이력을 유지한다.
+이를 실행 단위로 나눈 [후속 분석·작업계획](BUDDY_FOLLOWUP_PLAN_2026-10-10.md)에 우선순위·대상 코드·예외·측정·완료 조건을 정리했다. [실행 결과](BUDDY_FOLLOWUP_RESULT_2026-10-10.md)에서 완료한 수정/계측과 새 계정·OS 화면·플랫폼/배터리의 남은 수용을 구분한다. 기존 R09–R13/O11은 완료 이력을 유지한다.
 
 선택형 외부 효과음·프로젝트 문맥·현재 작업 지시 보완·대화 분기·파일 수정·기억/음성은 계획의 착수 조건에 따라 후속 범위를 정한다. OS 알림 소리 옵션은 구현했으며 캐릭터 팩 오디오나 jfxr 도입을 완료했다고 표시하지 않는다.
 
@@ -110,7 +110,7 @@ alpha18은 단위 126개·격리 Electron 14종·패키지 84개 파일을 통�
 | M10 | 선택형 문맥/명시적 기억 | 전송 내용 확인·사용자 수정/삭제·자동 수집 없는 정책 확정 |
 | M11 | push-to-talk/TTS | 한국어·정숙·중단·비용·기본 모델/권한 정책 확정. 작업 목적 템플릿은 BUD08에서 검토 |
 | M12 / B06 | Live2D/VRM·배회·다중 캐릭터 | 현재 데이터형 프레임 팩/수명 기능은 구현. 추가 수요·라이선스·자원 평가 후 결정 |
-| B01–B04 / S01–S16 | Slack 호출·키워드·맥락 판단·알림 묶기/답장 | 사용자 요청으로 대기. [S01–S17 상세 계획](../SLACK_INTEGRATION_PLAN.md#6-구현-작업과-완료-기준)에 정책·권한·검증 조건 유지 |
+| B01–B04 / S01–S16 | Slack 호출·키워드·맥락 판단·알림 묶기/답장 | 사용자 요청으로 대기. [S01–S17 상세 계획](../plans/SLACK_INTEGRATION_PLAN.md#6-구현-작업과-완료-기준)에 정책·권한·검증 조건 유지 |
 | B05 / S17 | 상시 수집 서버 | PC가 꺼져도 수집할 요구 확인 후 |
 | B08 | 다중 클라이언트 FIFO | 실제 수요·대화 격리·사용자별 공정성·순서/재시도 정책 확인 후 |
 

@@ -24,7 +24,7 @@ test('state read changes and invalid UTF-8 preserve originals and close their de
     let initial=Buffer.from(text);if(mode==='invalid-utf8'){const offset=text.indexOf('preserve');initial=Buffer.concat([initial.subarray(0,offset),Buffer.from([255]),initial.subarray(offset+1)]);}else if(mode==='bom')initial=Buffer.concat([Buffer.from([239,187,191]),initial]);fs.writeFileSync(file,initial);
     const opened=t.mock.method(fs,'openSync',(target,...args)=>{const descriptor=open(target,...args);if(target===file&&fd===undefined)fd=descriptor;return descriptor;});
     const reading=t.mock.method(fs,'readSync',(descriptor,bytes,offset,length,position)=>{if(descriptor===fd){maxBuffer=Math.max(maxBuffer,bytes.length);if(!changed){changed=true;if(mode==='grow')fs.appendFileSync(file,Buffer.alloc(2*1024*1024,32));else if(mode==='shrink')fs.truncateSync(file,initial.length-1);else if(mode==='same-size'){fs.writeFileSync(file,text.slice(0,-2)+'\n ');const future=new Date(Date.now()+1000);fs.utimesSync(file,future,future);}else if(mode==='replace'){fs.renameSync(file,file+'.external-original');fs.writeFileSync(file,text);}else if(mode==='read-error')throw Error('injected state read error');}}const count=read(descriptor,bytes,offset,length,position);if(descriptor===fd)totalRead+=count;return count;});
-    try{const loaded=new Store(root,{});reading.mock.restore();opened.mock.restore();assert.ok(loaded.warning,mode);assert.notEqual(loaded.data.settings.buddyName,'�reserve');assert.throws(()=>fs.fstatSync(fd),/EBADF/);assert.equal(maxBuffer,initial.length+1);assert.ok(totalRead<=initial.length+1);if(mode==='invalid-utf8'||mode==='bom')assert.ok(fs.readFileSync(file).equals(initial));assert.ok(fs.readdirSync(root).some(name=>name.startsWith('state.json.backup-')),mode);if(mode==='replace')assert.ok(fs.readFileSync(file+'.external-original').equals(initial));}finally{reading.mock.restore();opened.mock.restore();}
+    try{const loaded=new Store(root,{});reading.mock.restore();opened.mock.restore();assert.ok(loaded.warning,mode);assert.notEqual(loaded.data.settings.buddyName,'�reserve');assert.throws(()=>fs.fstatSync(fd),/EBADF/);assert.equal(maxBuffer,initial.length+1);assert.ok(totalRead<=initial.length+1);if(mode==='invalid-utf8'||mode==='bom')assert.ok(fs.readFileSync(file).equals(initial));const backups=fs.readdirSync(root).filter(name=>name.startsWith('state.json.backup-'));if(['invalid-utf8','bom'].includes(mode)){assert.equal(backups.length,1,mode);assert.ok(fs.readFileSync(path.join(root,backups[0])).equals(initial),mode);}else{assert.equal(backups.length,0,mode);assert.equal(loaded.writeBlocked,true,mode);assert.match(loaded.warning,/안전한 원본 백업/);assert.throws(()=>loaded.save(),/복구/);}const expected=mode==='grow'?Buffer.concat([initial,Buffer.alloc(2*1024*1024,32)]):mode==='shrink'?initial.subarray(0,initial.length-1):mode==='same-size'?Buffer.from(text.slice(0,-2)+'\n '):initial;assert.ok(fs.readFileSync(file).equals(expected),mode);if(mode==='replace')assert.ok(fs.readFileSync(file+'.external-original').equals(initial));}finally{reading.mock.restore();opened.mock.restore();}
   }
 });
 
@@ -116,6 +116,78 @@ test('character packs reject escape paths, executable SVG and unknown schemas; m
   fs.writeFileSync(path.join(dir,'manifest.json'),JSON.stringify({...manifest,schemaVersion:2})); assert.throws(()=>loadPack(dir),/형식/);
 });
 
+test('pack, skin and recovery reads reject changing inputs without unbounded allocation or deleting originals',t=>{
+  const {loadSkins}=require('../src/skins.cjs'),{PackLibrary}=require('../src/pack-library.cjs');
+  for(const kind of ['manifest','persona','image','skin','journal','cleanup-md'])for(const mode of ['grow','shrink','same-size','replace','read-error','invalid-utf8','oversized']){
+    const root=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'onggi-assets-bounded-')));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));let file,limit,invoke,journal;
+    if(['manifest','persona','image'].includes(kind)){
+      const manifest={schemaVersion:1,id:'test-pack',name:'Test',states:{idle:'idle.svg'},personas:{base:'base.md',modes:[{id:'mode',name:'Mode',file:'mode.md'}]}};
+      fs.writeFileSync(path.join(root,'manifest.json'),JSON.stringify(manifest)+'  ');fs.writeFileSync(path.join(root,'base.md'),'Base persona  ');fs.writeFileSync(path.join(root,'mode.md'),'Mode persona  ');fs.writeFileSync(path.join(root,'idle.svg'),'<svg/>  ');
+      file=path.join(root,{manifest:'manifest.json',persona:'base.md',image:'idle.svg'}[kind]);limit={manifest:65536,persona:16384,image:3*1024*1024}[kind];invoke=()=>loadPack(root);
+    }else if(kind==='skin'){
+      const paper=fs.readFileSync(path.join(__dirname,'../skins/paper.json'),'utf8');file=path.join(root,'paper.json');fs.writeFileSync(file,paper+'  ');limit=32768;invoke=()=>loadSkins(root);
+    }else{
+      const library=new PackLibrary(root),pending={version:1,phase:kind==='journal'?'committed':'prepared',operation:'install',id:'test-pack',stage:'.stage-11111111-1111-4111-8111-111111111111',backup:'.archive-22222222-2222-4222-8222-222222222222',oldRevision:null,newRevision:'a'.repeat(64),before:{characterId:'onggi-clip',personaModes:{}},createdPersonas:[],personaDirectoryCreated:false};journal=library.journal;
+      if(kind==='cleanup-md'){
+        const directory=path.join(root,'personas','test-pack');fs.mkdirSync(directory,{recursive:true});file=path.join(directory,'base.md');fs.writeFileSync(file,'Owned persona  ');pending.createdPersonas=[{id:'base',hash:createHash('sha256').update(fs.readFileSync(file)).digest('hex')}];limit=16384;
+      }else{file=journal;limit=131072;}
+      fs.writeFileSync(journal,JSON.stringify(pending)+'  ');invoke=()=>library.recover({writeBlocked:false,data:{settings:{}},save(){}});
+    }
+    if(mode==='invalid-utf8'){const bytes=fs.readFileSync(file);bytes[3]=255;fs.writeFileSync(file,bytes);}else if(mode==='oversized')fs.appendFileSync(file,Buffer.alloc(limit+1-fs.statSync(file).size,32));
+    const initial=fs.readFileSync(file),open=fs.openSync,read=fs.readSync;let descriptor,tracking=false,changed=false,maxBuffer=0,totalRead=0;
+    const opened=t.mock.method(fs,'openSync',(target,...args)=>{const fd=open(target,...args);if(target===file&&descriptor===undefined){descriptor=fd;tracking=true;}else if(fd===descriptor)tracking=false;return fd;});
+    const reading=t.mock.method(fs,'readSync',(fd,bytes,offset,length,position)=>{
+      if(fd===descriptor&&tracking){
+        maxBuffer=Math.max(maxBuffer,bytes.length);
+        if(!changed){changed=true;if(mode==='grow')fs.appendFileSync(file,Buffer.alloc(1024*1024,32));else if(mode==='shrink')fs.truncateSync(file,initial.length-1);else if(mode==='same-size'){const mutation=Buffer.from(initial);mutation[mutation.length-2]=10;fs.writeFileSync(file,mutation);const future=new Date(Date.now()+1000);fs.utimesSync(file,future,future);}else if(mode==='replace'){fs.renameSync(file,file+'.external');fs.writeFileSync(file,initial);}else if(mode==='read-error')throw Error('injected bounded read');}
+      }
+      const count=read(fd,bytes,offset,Math.min(length,3),position);if(fd===descriptor&&tracking)totalRead+=count;return count;
+    });
+    try{assert.throws(invoke,undefined,kind+' '+mode);}finally{reading.mock.restore();opened.mock.restore();}
+    assert.ok(fs.existsSync(file),kind+' '+mode);if(journal)assert.ok(fs.existsSync(journal),kind+' '+mode);
+    if(mode==='oversized'){assert.equal(maxBuffer,0);assert.equal(totalRead,0);}else{assert.equal(maxBuffer,initial.length+1,kind+' '+mode);assert.ok(totalRead<=initial.length+1,kind+' '+mode);assert.throws(()=>fs.fstatSync(descriptor),/EBADF/);}
+    if(mode==='invalid-utf8')assert.ok(fs.readFileSync(file).equals(initial));if(mode==='replace')assert.ok(fs.readFileSync(file+'.external').equals(initial));
+  }
+});
+
+test('bounded file reads accept an exact limit with short reads and reject links and special files before reading',t=>{
+  const {readBoundedFile}=require('../src/bounded-file.cjs'),root=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'onggi-boundary-')));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));const file=path.join(root,'file'),read=fs.readSync;fs.writeFileSync(file,'12345678');let calls=0,maxBuffer=0;
+  const reading=t.mock.method(fs,'readSync',(fd,bytes,offset,length,position)=>{calls++;maxBuffer=Math.max(maxBuffer,bytes.length);return read(fd,bytes,offset,Math.min(length,2),position);});
+  assert.equal(readBoundedFile(file,8).toString(),'12345678');assert.equal(maxBuffer,9);assert.ok(calls>4);calls=0;assert.throws(()=>readBoundedFile(file,7),/크기/);assert.equal(calls,0);
+  const link=path.join(root,'link');fs.symlinkSync(file,link);assert.throws(()=>readBoundedFile(link,8),/경로/);assert.throws(()=>readBoundedFile(root,8),/경로/);assert.equal(calls,0);reading.mock.restore();
+});
+
+test('bounded ASAR reads separate virtual and descriptor identities only inside their own physical archive',()=>{
+  const vm=require('node:vm'),source=fs.readFileSync(path.join(__dirname,'../src/bounded-file.cjs'),'utf8'),archive=path.join(path.parse(__dirname).root,'bundle','app.asar');
+  for(const mode of ['stable','archive-grow','archive-replace','archive-same-size','virtual-size','virtual-time','descriptor-change','size-mismatch','oversized','archive-directory','archive-link','unpacked-module','user-file','other-archive','node-runtime']){
+    const contents=Buffer.from('12345678'),makeStat=(ino,size,kind='file')=>({dev:1,ino,size,mtimeMs:1,ctimeMs:1,isFile:()=>kind==='file',isSymbolicLink:()=>kind==='link'}),virtual=makeStat(11,8),descriptor=makeStat(22,mode==='size-mismatch'?9:8),physical=makeStat(33,1024,mode==='archive-directory'?'directory':mode==='archive-link'?'link':'file');
+    const moduleDirectory=path.join(mode==='unpacked-module'?archive+'.unpacked':archive,'src'),file=mode==='user-file'?path.join(path.parse(archive).root,'profile','user.md'):mode==='other-archive'?path.join(path.parse(archive).root,'other','app.asar','user.md'):path.join(mode==='unpacked-module'?archive+'.unpacked':archive,'skins','paper.json');let offset=0,closed=false,changed=false,maxBuffer=0,originalFsImports=0;
+    const virtualFs={constants:fs.constants,lstatSync(target){assert.equal(target,file);return{...virtual,ino:virtual.ino++};},realpathSync:target=>target,openSync(target,flags){assert.equal(target,file);if(fs.constants.O_NOFOLLOW)assert.ok(flags&fs.constants.O_NOFOLLOW);if(fs.constants.O_NONBLOCK)assert.ok(flags&fs.constants.O_NONBLOCK);return 7;},fstatSync(fd){assert.equal(fd,7);return{...descriptor};},readSync(fd,bytes,start,length){assert.equal(fd,7);maxBuffer=Math.max(maxBuffer,bytes.length);if(!changed){changed=true;if(mode==='archive-grow')physical.size++;else if(mode==='archive-replace')physical.ino++;else if(mode==='archive-same-size')physical.mtimeMs++;else if(mode==='virtual-size')virtual.size++;else if(mode==='virtual-time')virtual.mtimeMs++;else if(mode==='descriptor-change')descriptor.ctimeMs++;}const count=Math.min(length,2,contents.length-offset);contents.copy(bytes,start,offset,offset+count);offset+=count;return count;},closeSync(fd){assert.equal(fd,7);closed=true;}};
+    const diskFs={lstatSync(target){assert.equal(target,archive);return{...physical};},realpathSync:target=>target},context={module:{exports:{}},__dirname:moduleDirectory,process:{versions:mode==='node-runtime'?{}:{electron:'44.5.1'}},Buffer,require:name=>{if(name==='node:fs')return virtualFs;if(name==='node:path')return path;if(name==='original-fs'){originalFsImports++;return diskFs;}throw Error('unexpected import '+name);}};
+    vm.runInNewContext(source,context);const read=context.module.exports.readBoundedFile;
+    if(mode==='stable'){assert.equal(read(file,8).toString(),'12345678');assert.equal(maxBuffer,9);assert.equal(offset,8);}else assert.throws(()=>read(file,mode==='oversized'?7:8),undefined,mode);
+    assert.equal(closed,true,mode);if(['size-mismatch','oversized','archive-directory','archive-link','unpacked-module','user-file','other-archive','node-runtime'].includes(mode))assert.equal(maxBuffer,0,mode);
+    assert.equal(originalFsImports,['unpacked-module','node-runtime'].includes(mode)?0:1,mode);
+  }
+});
+
+test('history fingerprints keep worker snapshots bounded while unchanged saves, metadata and rollback retain their contracts',async t=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'onggi-snapshot-fingerprint-')),store=new Store(root,{demo:true});t.after(async()=>{await store.closeWorker();fs.rmSync(root,{recursive:true,force:true});});
+  store.data.messages=[{id:'fingerprint-user',role:'user',text:'x'.repeat(1024*1024),status:'completed',createdAt:1700000000000}];await store.saveAsync();
+  const file=path.join(store.historyDirectory,store.data.activeConversationId+'.json'),snapshot=store.snapshot,initial=fs.statSync(file),post=store.worker.postMessage,posted=[],received=[];
+  assert.match(snapshot,/^[a-f0-9]{64}$/);assert.ok(fs.statSync(file).size>1024*1024);
+  store.worker.on('message',result=>received.push(result.snapshot));store.worker.postMessage=function(message){posted.push(message.snapshot);return post.call(this,message);};
+  await store.saveAsync();assert.equal(store.snapshot,snapshot);assert.equal(fs.statSync(file).mtimeMs,initial.mtimeMs);assert.equal(posted[0],undefined);
+  store.data.conversations[0].title='manual title';store.data.conversations[0].titleSource='manual';store.data.conversations[0].pinned=true;store.save({includeHistory:false});store.registryRevision++;
+  await store.saveAsync();assert.equal(posted[1],snapshot);assert.ok(received.every(value=>value.length===64));assert.equal(store.snapshot,snapshot);
+  store.data.messages[0].text='different';const write=fs.writeFileSync,mocked=t.mock.method(fs,'writeFileSync',(target,...args)=>{if(target===file+'.tmp')throw Error('injected fingerprint write');return write(target,...args);});
+  try{assert.throws(()=>store.save(),/injected fingerprint write/);}finally{mocked.mock.restore();}
+  assert.equal(store.snapshot,snapshot);assert.equal(store.writeBlocked,false);store.save();assert.notEqual(store.snapshot,snapshot);
+  const restarted=new Store(root,{});assert.equal(restarted.snapshot,store.snapshot);assert.equal(restarted.data.conversations[0].title,'manual title');assert.equal(restarted.data.conversations[0].pinned,true);assert.equal(restarted.data.messages[0].text,'different');
+  const firstId=store.data.activeConversationId,changedSnapshot=store.snapshot;store.newConversation();assert.equal(store.snapshot,null);await store.saveAsync();assert.equal(store.snapshot,null);
+  store.openConversation(firstId);assert.equal(store.snapshot,changedSnapshot);assert.equal(store.data.messages[0].text,'different');await store.saveAsync();assert.equal(store.snapshot,changedSnapshot);assert.equal(new Store(root,{}).snapshot,changedSnapshot);
+});
+
 test('restart preserves completed history and marks pending work interrupted without rerunning', t => {
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'onggi-store-test-')); t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
   const store=new Store(root,{characterId:'onggi-clip'});
@@ -128,7 +200,7 @@ test('restart preserves completed history and marks pending work interrupted wit
 
 test('Codex JSONL framing, prompt integrity, approval and cancellation roundtrip', async t => {
   const bridge=new CodexConnection(); t.after(()=>bridge.stop());
-  const fixture=path.join(__dirname,'fixtures','fake-codex.cjs'); fs.chmodSync(fixture,0o755);
+  const fixture=path.join(__dirname,'fixtures','fake-codex.cjs');
   await bridge.connect(fixture,__dirname);
   assert.equal((await bridge.request('thread/start',{})).thread.id,'thread-test');
   const notifications=[], requests=[]; bridge.on('notification',m=>notifications.push(m)); bridge.on('request',m=>requests.push(m));

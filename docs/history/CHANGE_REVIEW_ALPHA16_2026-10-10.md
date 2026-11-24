@@ -126,7 +126,7 @@ HEAD 대비 JS/CJS/MJS 변경에 새 독립 주석은 reload 편집 보존 이�
 
 ## 문서·패키지의 정확성
 
-[AGENTS.md](../../AGENTS.md), [개발 구조](../ARCHITECTURE.md), [작업 계획](../../TASKS.md), [버디 로드맵](../BUDDY_ROADMAP_2026-10-10.md)의 기존 모듈·데이터 팩·실제/체험 구분과 증거 규칙을 기준으로 했다. 보고서 작성에는 저장 문서용 write-page 스킬의 기존 형식·근거·이력 보존 원칙을 적용했다. API 의미는 기존 연결 코드와 설치 CLI가 생성한 로컬 schema를 참고했으며 새 API 지원이나 에셋 라이선스를 웹 조사한 보고서는 아니다.
+[AGENTS.md](../../AGENTS.md), [개발 구조](../ARCHITECTURE.md), [작업 계획](../../TASKS.md), [버디 로드맵](BUDDY_ROADMAP_2026-10-10.md)의 기존 모듈·데이터 팩·실제/체험 구분과 증거 규칙을 기준으로 했다. 보고서 작성에는 저장 문서용 write-page 스킬의 기존 형식·근거·이력 보존 원칙을 적용했다. API 의미는 기존 연결 코드와 설치 CLI가 생성한 로컬 schema를 참고했으며 새 API 지원이나 에셋 라이선스를 웹 조사한 보고서는 아니다.
 
 README/TASKS/검증 보고서는 소스 alpha16, staging build32, 일반 실행 경로 alpha14/CFBundleVersion 30, 이전 staging 복구 build31을 구분한다. 이번 Info.plist 재확인도 32/30/31이었다. version과 lockfile이 일치하고 패키징의 onggiProjectVersion·worker unpack·검사/문서 제외·로컬 ZIP·ad-hoc 서명 경계를 유지한다. 공개 Developer ID·공증·Windows 배포 완료 주장은 없다.
 

@@ -1,6 +1,6 @@
 # my_budy 후속 작업 분석과 실행 계획
 
-2026-10-10. [품질 개선 결과](history/QUALITY_CYCLE_RESULT_2026-10-10.md), [제품 방향 검토](BUDDY_PRODUCT_REVIEW_2026-10-10.md), [현재 작업 목록](../TASKS.md)을 alpha17 코드와 대조해 작성한 후속 계획이다. 계획 작성 시점에는 아래 작업을 구현하거나 실기 검증을 새로 완료하지 않았다. 이후 사용자 실행 요청에 따른 alpha18의 수정·측정·검증과 남은 수용은 [후속 작업 결과](history/BUDDY_FOLLOWUP_RESULT_2026-10-10.md)를 따른다. 아래 출발점과 코드 위치는 계획 작성 당시 기준으로 유지한다.
+2026-10-10. [품질 개선 결과](QUALITY_CYCLE_RESULT_2026-10-10.md), [제품 방향 검토](BUDDY_PRODUCT_REVIEW_2026-10-10.md), [현재 작업 목록](../../TASKS.md)을 alpha17 코드와 대조해 작성한 후속 계획이다. 계획 작성 시점에는 아래 작업을 구현하거나 실기 검증을 새로 완료하지 않았다. 이후 사용자 실행 요청에 따른 alpha18의 수정·측정·검증과 남은 수용은 [후속 작업 결과](BUDDY_FOLLOWUP_RESULT_2026-10-10.md)를 따른다. 아래 출발점과 코드 위치는 계획 작성 당시 기준으로 유지한다.
 
 우선순위는 **기존 기능의 실제 사용 수용 → 같은 환경에서 성능 측정 → 확인된 병목의 최소 수정 → 플랫폼·배포 수용**이다. my_budy의 목적은 캐릭터·이름·말투를 유지하며 로컬 Codex와 편하게 대화하는 버디다. 질문 전달, 첨부, 기다림, 결과 확인이 안정적인지부터 확인한다. 조용한 개인 버디와 CLI 사용 편의성을 우선한다는 판단은 현재의 작업 가정이며 사용자 선호가 확정됐다는 뜻은 아니다.
 
@@ -17,13 +17,13 @@
 | O11 | 개별 응답 이미지 저장 취소 시 원본 0회 읽기, 성공 시 대화상자 후 1회 읽기 | 완료된 최적화. 대화 전체 내보내기의 버퍼 비용과 구분 |
 | 기존 정리 | 중복 UI 처리·구 import IPC·일회성 스크립트·문서 이력 분리 완료 | 기존 제거 계획을 다시 일괄 실행하지 않음 |
 
-근거는 [최종 검증 요약](../artifacts/goal-alpha17-final-validation.json), [통합 결과](../artifacts/goal-alpha17-final/integration.json), [패키지 대조](../artifacts/goal-alpha17-package-final-state/package-verification.json), [이전 정리 결과](history/CLEANUP_RESULT_2026-10-10.md)다. 최종 요약의 `requiredRemainingWork: []`는 해당 수정 사이클의 완료를 뜻한다. OS 실기·후속 성능·배포 과제까지 완료했다는 뜻으로 확대하지 않는다.
+근거는 [최종 검증 요약](../../artifacts/goal-alpha17-final-validation.json), [통합 결과](../../artifacts/goal-alpha17-final/integration.json), [패키지 대조](../../artifacts/goal-alpha17-package-final-state/package-verification.json), [이전 정리 결과](CLEANUP_RESULT_2026-10-10.md)다. 최종 요약의 `requiredRemainingWork: []`는 해당 수정 사이클의 완료를 뜻한다. OS 실기·후속 성능·배포 과제까지 완료했다는 뜻으로 확대하지 않는다.
 
 일반 실행 alpha.14/build30과 alpha.16/build32·alpha.15/build31 복구 묶음은 보존한다. 사용 중인 앱이나 모델 작업을 자동으로 종료하거나 일반 실행 경로를 덮어쓰지 않는다. 후보를 검사할 때는 실제 실행 버전을 확인해 이전 앱의 단일 인스턴스 창을 최신 후보로 오인하지 않는다.
 
 ## 2. 작업 원칙과 판단 기준
 
-[AGENTS.md](../AGENTS.md)와 [개발 구조](ARCHITECTURE.md)를 적용한다.
+[AGENTS.md](../../AGENTS.md)와 [개발 구조](../ARCHITECTURE.md)를 적용한다.
 
 - 단순 상태 검사·문자열 처리·지역 Map 구성은 기존 함수 안에서 처리한다. 한 호출의 몇 줄을 감싸는 helper, 범용 dispatcher, 새 상태관리 프레임워크를 만들지 않는다.
 - 프로세스, 저장, 첨부·이미지 검증, 데이터형 캐릭터 팩의 책임 경계는 유지한다. 파일 I/O·프로세스 요청·큰 데이터 처리는 필요한 비동기 수명을 유지한다. 인라인 작성 원칙을 메인 프로세스의 동기 I/O 확대 근거로 삼지 않는다.
@@ -53,7 +53,7 @@
 
 **분석.** 단계 안내와 해결 버튼은 이미 구현됐다. 실제 기존 인증 읽기와 로그인 순서·취소·5분 만료의 모의 검증도 있다. 남은 핵심은 처음 쓰는 사람이 문제를 구분하고 첫 대화까지 도달하는지, 실제 미로그인 계정의 브라우저 콜백이 정상인지다. 단순히 설치 버튼을 더 늘리는 것으로 해결됐다고 판단할 수 없다.
 
-주요 위치는 [refreshModels](../src/main.cjs:99), [연결 복구 action](../src/main.cjs:930), [인증 처리](../src/connection-setup.cjs:93), [모델 목록](../src/models.cjs), [최초 연결 안내](FIRST_RUN_REVIEW.md)다.
+주요 위치는 [refreshModels](../../src/main.cjs:99), [연결 복구 action](../../src/main.cjs:930), [인증 처리](../../src/connection-setup.cjs:93), [모델 목록](../../src/models.cjs), [최초 연결 안내](DOCUMENTATION_BEFORE_CLEANUP_2026-10-21.md#first_run_review)다.
 
 | 시나리오 | 확인할 동작·예외 | 완료 조건 |
 |---|---|---|
@@ -73,7 +73,7 @@
 
 **분석.** 현재 회귀는 저장 대기 중 제거 RPC, 큐 편집, trusted 드롭의 순서 교차까지 확인한다. 실제 물리 입력·클립보드·한글 IME·OS 알림의 끝까지 이어지는 경험은 별도 수용이다. 특히 요청했던 그림 대화는 텍스트만 복원한 것을 이미지 표시 성공으로 간주할 수 없다.
 
-대상은 [composer·초안과 큐 편집](../src/ui/renderer.mjs:68), [trusted 입력](../src/preload.cjs:13), [첨부 IPC](../src/main.cjs:612), [이미지 활용](../src/main.cjs:956), [완료 저장](../src/main.cjs:224), [큐 실행](../src/main.cjs:256), [첨부 보관](../src/attachments.cjs), [이미지 검증](../src/response-images.cjs)다.
+대상은 [composer·초안과 큐 편집](../../src/ui/renderer.mjs:68), [trusted 입력](../../src/preload.cjs:13), [첨부 IPC](../../src/main.cjs:612), [이미지 활용](../../src/main.cjs:956), [완료 저장](../../src/main.cjs:224), [큐 실행](../../src/main.cjs:256), [첨부 보관](../../src/attachments.cjs), [이미지 검증](../../src/response-images.cjs)다.
 
 | 수용 항목 | 정상·예외 조합 | 합격 조건 |
 |---|---|---|
@@ -94,7 +94,7 @@
 
 ## 6. 후속 3 — 성능을 먼저 측정
 
-**현재 확인한 비용 후보.** 워커 저장은 직렬화돼 있지만 [saveAsync](../src/store.cjs:274)의 `worker.postMessage`는 전체 data를 구조화 복사한다. [readHistory](../src/store.cjs:98)는 최대 32MiB 기록을 동기 읽기·UTF-8 decode·JSON parse한다. [원격 병합](../src/main.cjs:903)은 턴마다 기존 배열을 검색한다. [내보내기](../src/main.cjs:854)는 대화 사본과 최대 128MiB·256개 이미지 버퍼를 보관한다. 이것들은 코드에서 확인한 작업량이며, 체감 지연·메모리 장애가 이미 재현됐다는 뜻은 아니다.
+**현재 확인한 비용 후보.** 워커 저장은 직렬화돼 있지만 [saveAsync](../../src/store.cjs:274)의 `worker.postMessage`는 전체 data를 구조화 복사한다. [readHistory](../../src/store.cjs:98)는 최대 32MiB 기록을 동기 읽기·UTF-8 decode·JSON parse한다. [원격 병합](../../src/main.cjs:903)은 턴마다 기존 배열을 검색한다. [내보내기](../../src/main.cjs:854)는 대화 사본과 최대 128MiB·256개 이미지 버퍼를 보관한다. 이것들은 코드에서 확인한 작업량이며, 체감 지연·메모리 장애가 이미 재현됐다는 뜻은 아니다.
 
 | 측정 대상 | 데이터/조건 | 수집할 값 | 판단에 필요한 구분 |
 |---|---|---|---|
@@ -117,7 +117,7 @@
 4. 프로세스별 메모리와 최고값을 남긴다. 공유 메모리가 있으므로 단순 합계를 유일한 물리 RAM 사용량으로 부르지 않는다. 작업 후 유휴 상태로 돌아왔을 때 메모리도 확인한다.
 5. 사용 시나리오의 지연과 직접 연결된 비용을 확인한 뒤 수정 후보를 고른다. 반복 변동보다 작은 차이는 개선 확정으로 쓰지 않는다. 병목이 없으면 해당 구조 개선을 보류하고 측정 근거만 남긴다.
 
-기존 [performance smoke](../scripts/performance-ui-smoke.cjs)는 1,000개 메시지·표시 페이지·delta IPC·용량 거절·동기 `store.save()` 시간 확인이다. 현재 `saveAsync()`의 복사/워커 지연을 모두 측정하거나 큰 이미지 내보내기를 비교하는 검사는 아니다. [resource smoke](../scripts/resource-smoke.cjs)는 Electron 자기 프로세스 CPU/메모리 표본이며 CLI·배터리 측정을 대신하지 않는다. [packaged resource wrapper](../scripts/packaged-resource-smoke.cjs)는 Electron으로 ASAR를 로드하므로 실제 서명된 `.app` 실행·알림·플랫폼 수용과 구분한다. [timing smoke](../scripts/timing-ui-smoke.cjs)는 테스트 CLI의 단계 계산·FIFO·화면 ACK 계약을 확인한다.
+기존 [performance smoke](../../scripts/performance-ui-smoke.cjs)는 1,000개 메시지·표시 페이지·delta IPC·용량 거절·동기 `store.save()` 시간 확인이다. 현재 `saveAsync()`의 복사/워커 지연을 모두 측정하거나 큰 이미지 내보내기를 비교하는 검사는 아니다. [resource smoke](../../scripts/resource-smoke.cjs)는 Electron 자기 프로세스 CPU/메모리 표본이며 CLI·배터리 측정을 대신하지 않는다. [packaged resource wrapper](../../scripts/packaged-resource-smoke.cjs)는 Electron으로 ASAR를 로드하므로 실제 서명된 `.app` 실행·알림·플랫폼 수용과 구분한다. [timing smoke](../../scripts/timing-ui-smoke.cjs)는 테스트 CLI의 단계 계산·FIFO·화면 ACK 계약을 확인한다.
 
 기존 검사 스크립트에 필요한 계측과 원자료만 추가하는 것을 우선한다. 테스트용 계측을 일반 사용자 UI에 노출하지 않는다. 체험/테스트 CLI 성능과 실제 CLI 연결의 자원을 구분하고, 실제 모델을 호출하지 않아도 가능한 측정부터 수행한다.
 
@@ -142,9 +142,9 @@
 
 ## 8. 후속 5 — CLI 페이지 조회와 기록 보존
 
-**분석.** 현재 [load-older](../src/main.cjs:751)는 이미 메모리에 있는 기록의 화면 표시 범위를 늘린다. [open-conversation](../src/main.cjs:881)은 `thread/read(includeTurns:true)`로 전체 원격 기록을 가져온다. 원격 페이징만 바꾸어도 로컬 JSON 전체 읽기 비용은 그대로 남을 수 있어 C07과 효과를 나누어 측정해야 한다.
+**분석.** 현재 [load-older](../../src/main.cjs:751)는 이미 메모리에 있는 기록의 화면 표시 범위를 늘린다. [open-conversation](../../src/main.cjs:881)은 `thread/read(includeTurns:true)`로 전체 원격 기록을 가져온다. 원격 페이징만 바꾸어도 로컬 JSON 전체 읽기 비용은 그대로 남을 수 있어 C07과 효과를 나누어 측정해야 한다.
 
-설치 CLI에서 생성한 [ThreadReadParams](../artifacts/onboarding-protocol-schema/v2/ThreadReadParams.json), [ThreadTurnsListParams](../artifacts/onboarding-protocol-schema/v2/ThreadTurnsListParams.json), [ThreadTurnsListResponse](../artifacts/onboarding-protocol-schema/v2/ThreadTurnsListResponse.json), [ThreadItemsListParams](../artifacts/onboarding-protocol-schema/v2/ThreadItemsListParams.json)를 확인했다. `thread/read`에는 cursor가 없다. 턴 페이지 조회에는 `cursor/limit/sortDirection/itemsView`가 있고 기본 itemsView는 summary다. 항목 페이지는 별도 cursor/turnId를 사용한다. 해당 설치 스키마가 다른 CLI 버전/제공자의 지원을 보장하지 않는다. 현재 main은 이미 experimentalApi 협상을 사용하므로 협상 옵션을 새로 추가하는 작업으로 착각하지 않는다.
+설치 CLI에서 생성한 [ThreadReadParams](../../artifacts/onboarding-protocol-schema/v2/ThreadReadParams.json), [ThreadTurnsListParams](../../artifacts/onboarding-protocol-schema/v2/ThreadTurnsListParams.json), [ThreadTurnsListResponse](../../artifacts/onboarding-protocol-schema/v2/ThreadTurnsListResponse.json), [ThreadItemsListParams](../../artifacts/onboarding-protocol-schema/v2/ThreadItemsListParams.json)를 확인했다. `thread/read`에는 cursor가 없다. 턴 페이지 조회에는 `cursor/limit/sortDirection/itemsView`가 있고 기본 itemsView는 summary다. 항목 페이지는 별도 cursor/turnId를 사용한다. 해당 설치 스키마가 다른 CLI 버전/제공자의 지원을 보장하지 않는다. 현재 main은 이미 experimentalApi 협상을 사용하므로 협상 옵션을 새로 추가하는 작업으로 착각하지 않는다.
 
 ### 구현 전 확정할 계약
 
@@ -161,7 +161,7 @@
 
 ## 9. 후속 6 — 표시 의미와 입력 상태
 
-**읽음.** 현재 [ACK](../src/ui/renderer.mjs:96)는 최신 완료 답변의 실제 화면 교차와 첫 이미지 미리보기 준비/실패를 확인한다. 모든 이미지와 모든 글을 읽었다는 추적 기능은 아니다. 다른 대화·숨김·설정 탭·잠금·이미지 pending·스크롤 밖에서는 읽음 처리하지 않는 현재 계약을 우선 유지한다. 여러 이미지 수용에서 표현이 오해를 유발하면 안내와 정책을 먼저 정하고 해당 경로만 변경한다. 이미지 실패 안내를 표시한 것과 이미지 원본 확인 성공은 별도로 기록한다.
+**읽음.** 현재 [ACK](../../src/ui/renderer.mjs:96)는 최신 완료 답변의 실제 화면 교차와 첫 이미지 미리보기 준비/실패를 확인한다. 모든 이미지와 모든 글을 읽었다는 추적 기능은 아니다. 다른 대화·숨김·설정 탭·잠금·이미지 pending·스크롤 밖에서는 읽음 처리하지 않는 현재 계약을 우선 유지한다. 여러 이미지 수용에서 표현이 오해를 유발하면 안내와 정책을 먼저 정하고 해당 경로만 변경한다. 이미지 실패 안내를 표시한 것과 이미지 원본 확인 성공은 별도로 기록한다.
 
 **입력 전이.** 일반 초안, 첨부 가져오기/제거, 전송 접수, 편집 진입, 편집 중, 편집 저장, 취소, reload, 저장 차단 상태의 허용 action을 표로 만든다. boolean을 새 enum/프레임워크로 일괄 치환하는 작업으로 확대하지 않는다.
 

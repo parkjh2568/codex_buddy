@@ -1,9 +1,9 @@
 # my_budy 버디 기능 확장과 에셋 활용 계획
 
-구현 이후 상태는 [alpha.15/build31 확장 결과](history/BUDDY_EXPANSION_RESULT_2026-10-10.md)에 기록했다. 이 문서는 착수 시 정한 우선순위·계약·수용 조건을 보존한다.
+구현 이후 상태는 [alpha.15/build31 확장 결과](BUDDY_EXPANSION_RESULT_2026-10-10.md)에 기록했다. 이 문서는 착수 시 정한 우선순위·계약·수용 조건을 보존한다.
 2026-10-10 기준 계획이다. `my_budy`는 로컬 Codex CLI와 연결하는 바탕화면 버디이며 현재 제품명은 옹기봇이다. 작은 친구에게 질문을 건네고, 다른 일을 하는 동안 조용히 답변을 기다렸다가 결과를 확인하는 흐름을 우선한다. 캐릭터의 모습과 말투를 사용자가 고르는 경험도 이 흐름의 일부다.
 
-기준은 alpha.14 소스와 Electron 44.5.1, [현재 구조](ARCHITECTURE.md), [캐릭터 팩 규격](CHARACTER_PACKS.md), [작업 목록](../TASKS.md)이다. 코드 재검토를 반영해 선행 결함 BUD00과 실행 단위·저장 계약·복구 조건을 보완했다. 아래 항목은 구현 전 계획이며, 기존 기능의 검증 범위는 [알파 보고서](ALPHA_REPORT.md)를 따른다. 실제 계정의 추가 기능 실행이나 외부 에셋 다운로드·변환은 이 검토에 포함하지 않았다.
+기준은 alpha.14 소스와 Electron 44.5.1, [현재 구조](../ARCHITECTURE.md), [캐릭터 팩 규격](../CHARACTER_PACKS.md), [작업 목록](../../TASKS.md)이다. 코드 재검토를 반영해 선행 결함 BUD00과 실행 단위·저장 계약·복구 조건을 보완했다. 아래 항목은 구현 전 계획이며, 기존 기능의 검증 범위는 [알파 보고서](../ALPHA_REPORT.md)를 따른다. 실제 계정의 추가 기능 실행이나 외부 에셋 다운로드·변환은 이 검토에 포함하지 않았다.
 
 ## 버디 경험의 기준
 
@@ -11,7 +11,7 @@
 - 캐릭터의 반응은 실제 대기·실행·응답·승인·오류 상태와 연결한다. 정숙 설정은 장식을 줄이고, 필요한 승인과 저장 오류는 확인할 수 있게 한다.
 - 사용 중인 캐릭터·이름·말투와 대화가 이어지는 느낌을 유지한다. 새로운 작업 목적이나 프로젝트 설정은 질문을 접수할 때 명시적으로 적용한다.
 - 동작·소리·알림은 집중을 방해하지 않도록 제한한다. 숨김·잠금·절전·배터리·움직임 줄이기 정책을 함께 적용한다.
-- [AGENTS.md](../AGENTS.md)에 따라 단순 상태 변경·검증·표시는 기존 함수 안에 둔다. CLI·저장·첨부·이미지·팩의 실제 실패 경계는 기존 모듈을 재사용한다. 큰 파일 읽기나 decode를 메인 스레드의 동기 작업으로 늘리지 않는다.
+- [AGENTS.md](../../AGENTS.md)에 따라 단순 상태 변경·검증·표시는 기존 함수 안에 둔다. CLI·저장·첨부·이미지·팩의 실제 실패 경계는 기존 모듈을 재사용한다. 큰 파일 읽기나 decode를 메인 스레드의 동기 작업으로 늘리지 않는다.
 
 ## 현재 코드에서 확인한 출발점
 
@@ -27,7 +27,7 @@
 | 팩 | 7개 정적 상태 이미지, v2의 idle 눈 깜빡임, 미리보기·보관·내보내기 | 규격에 맞는 추가 캐릭터 1종 시범 적용 |
 | Codex | 기본 읽기 전용 세션, 일반 실행, 모델·추론·속도·말투 접수 snapshot | 작업 목적·리뷰·스킬 선택, 계획·사용량 표시 |
 
-주요 변경 지점은 [main.cjs](../src/main.cjs), [preload.cjs](../src/preload.cjs), [renderer.mjs](../src/ui/renderer.mjs), [index.html](../src/ui/index.html), [style.css](../src/ui/style.css)다. 첨부는 [attachments.cjs](../src/attachments.cjs), 응답 이미지는 [response-images.cjs](../src/response-images.cjs), 설정·대화는 [store.cjs](../src/store.cjs), 연결은 [connection-setup.cjs](../src/connection-setup.cjs), 팩은 [packs.cjs](../src/packs.cjs)·[pack-library.cjs](../src/pack-library.cjs)가 맡는다.
+주요 변경 지점은 [main.cjs](../../src/main.cjs), [preload.cjs](../../src/preload.cjs), [renderer.mjs](../../src/ui/renderer.mjs), [index.html](../../src/ui/index.html), [style.css](../../src/ui/style.css)다. 첨부는 [attachments.cjs](../../src/attachments.cjs), 응답 이미지는 [response-images.cjs](../../src/response-images.cjs), 설정·대화는 [store.cjs](../../src/store.cjs), 연결은 [connection-setup.cjs](../../src/connection-setup.cjs), 팩은 [packs.cjs](../../src/packs.cjs)·[pack-library.cjs](../../src/pack-library.cjs)가 맡는다.
 
 ## 코드 재검토에서 확인한 선행 사항
 
@@ -46,7 +46,7 @@
 
 복사 결함은 코드와 설치 타입에서 확인했으며 OS 복사 실패를 재현한 결과는 아니다. 이미지 클립보드는 이 버전의 비동기 `read`/`write`와 `ClipboardItem`을 기준으로 설계한다. 과거 `readImage`/`writeImage` 예제의 적용을 가정하지 않는다. [Electron clipboard](https://www.electronjs.org/docs/latest/api/clipboard)
 
-서명 검사는 `dist/OnggiBot-darwin-arm64/OnggiBot.app`과 `dist/staging/OnggiBot-darwin-arm64/OnggiBot.app`에 대해 읽기 전용으로 수행했으며 두 진단은 `code has no resources but signature indicates they must be present`였다. 패키징 스크립트는 Developer ID 서명/공증을 구성하지 않는다. 공식 문서는 macOS Notification의 서명 조건과 unsigned 실패 이벤트를 설명한다. 이 검사만으로 OS 알림 표시 실패를 재현했다고 기록하지 않는다. [Electron Notification](https://www.electronjs.org/docs/latest/api/notification)·[배포 조건](BUILD_GUIDE.md)
+서명 검사는 `dist/OnggiBot-darwin-arm64/OnggiBot.app`과 `dist/staging/OnggiBot-darwin-arm64/OnggiBot.app`에 대해 읽기 전용으로 수행했으며 두 진단은 `code has no resources but signature indicates they must be present`였다. 패키징 스크립트는 Developer ID 서명/공증을 구성하지 않는다. 공식 문서는 macOS Notification의 서명 조건과 unsigned 실패 이벤트를 설명한다. 이 검사만으로 OS 알림 표시 실패를 재현했다고 기록하지 않는다. [Electron Notification](https://www.electronjs.org/docs/latest/api/notification)·[배포 조건](../BUILD_GUIDE.md)
 
 ## 구현 순서
 
@@ -290,4 +290,4 @@ Fab/Unity 상품과 Sonniss 소리는 완성 앱에서의 이용과 사용자가
 
 자원 평가는 같은 팩·같은 설정·같은 환경에서 전후로 비교한다. 유휴/숨김/잠금의 CPU·메모리·timer·IPC, 이미지 가져오기와 저장 지연을 확인한다. 배터리·Windows·DPI·설치/서명은 기존 C08/C10의 실기 범위를 유지한다. 개발 실행의 성공만으로 패키지 OS 알림이나 다른 플랫폼이 검증됐다고 표시하지 않는다.
 
-실제 모델 실행은 fixture 회귀 이후 필요한 사례를 선택해 확인하며 호출 여부·모델·환경·결과를 기록한다. 계획/리뷰/스킬의 스키마 존재, 모의 CLI 결과, 실제 응답을 구분한다. 완료 기록에는 변경 내용·통과한 검사·실패/미검증 범위·복구 방법을 남기고 그때 [TASKS](../TASKS.md)의 상태를 갱신한다.
+실제 모델 실행은 fixture 회귀 이후 필요한 사례를 선택해 확인하며 호출 여부·모델·환경·결과를 기록한다. 계획/리뷰/스킬의 스키마 존재, 모의 CLI 결과, 실제 응답을 구분한다. 완료 기록에는 변경 내용·통과한 검사·실패/미검증 범위·복구 방법을 남기고 그때 [TASKS](../../TASKS.md)의 상태를 갱신한다.

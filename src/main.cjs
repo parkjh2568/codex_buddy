@@ -3,7 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { randomUUID,createHash } = require('node:crypto');
 const {Blob}=require('node:buffer');
-const {setImmediate}=require('node:timers');
+const {Worker}=require('node:worker_threads');
 const { Store } = require('./store.cjs');
 const projectMetadata=require('../package.json');
 const { loadPack } = require('./packs.cjs');
@@ -19,6 +19,9 @@ const {AttachmentStore}=require('./attachments.cjs');
 const {StorageMaintenance}=require('./storage-maintenance.cjs');
 let NativeNotification=require('electron').Notification;
 
+if((process.argv.includes('--native-notification-review')||!app.isPackaged&&process.argv.some(arg=>arg.startsWith('--')&&(arg==='--smoke'||arg.endsWith('-smoke'))))&&!process.argv.includes('--interactive')){
+  console.error('UI 검사는 창·입력 포커스를 바꿀 수 있습니다. 화면 검증 시간을 확보한 뒤 --interactive를 명시해주세요.');app.exit(2);
+}
 const nativeNoticeReview=process.argv.includes('--native-notification-review')&&process.env.ONGGI_NATIVE_NOTICE_REVIEW==='1'&&path.isAbsolute(process.env.ONGGI_SMOKE_ROOT??'');
 if(process.argv.includes('--native-notification-review')&&!nativeNoticeReview)throw Error('알림 검증에는 명시적인 검증 환경과 임시 프로필 폴더가 필요합니다.');
 if(nativeNoticeReview)app.setPath('userData',path.join(process.env.ONGGI_SMOKE_ROOT,'native-notification-profile'));
@@ -64,7 +67,7 @@ connectionSetup.on('change',()=>{if(connectionSetup.state.phase==='login-require
 connectionSetup.on('authenticated',()=>{void refreshModels(false).catch(()=>{});});
 let modelsStatus = 'idle', modelsError = null, modelRefresh = null;
 let cliFileIdentity = null;
-let historyLoading = false, historyWarning = null, preparing = 0, packImporting = false,historySearchRevision=0;
+let historyLoading = false, historyWarning = null, preparing = 0, packImporting = false,historySearchRevision=0,historySearchTask=null;
 let remoteHistory=null,historyRequest=null;
 let personaLibrary,personaCatalog=[],skins=[],packLibrary,packPreview=null,packArchiveCatalog=[];
 let petPointerTimer, petPointerSignature = '', petIgnoringMouse = true, petDrag = null;
@@ -127,6 +130,16 @@ async function refreshModels(onlyIfStale = false) {
   try { return await modelRefresh; }
   catch (error) { if (!codex.process) connectionState = 'disconnected'; modelsStatus = modelCatalog.models.length ? 'ready' : 'error'; modelsError = error.message; publish(); throw error; }
   finally { modelRefresh = null; }
+}
+
+function olderMessageCount(messages, visibleCount) {
+  let count=0,bytes=0;
+  for(let index=messages.length-visibleCount-1;index>=0&&count<100;index--){
+    const size=Buffer.byteLength(messages[index].text);
+    if(count&&bytes+size>256*1024)break;
+    bytes+=size;count++;
+  }
+  return count;
 }
 
 function publish(immediate = false) {
@@ -208,11 +221,7 @@ function publish(immediate = false) {
       else {
         const reset=!window.messageView || window.messageView.conversationId!==state.activeConversationId;
         if (reset) {window.messageView={conversationId:state.activeConversationId,entries:new Map()};window.expandedHistory=false;}
-        if (!window.expandedHistory) {
-          let count=0,bytes=0;
-          for(let i=store.data.messages.length-1;i>=0&&count<100;i--){const size=Buffer.byteLength(store.data.messages[i].text);if(count&&bytes+size>256*1024)break;bytes+=size;count++;}
-          window.messageLimit=Math.max(1,count);
-        }
+        if (!window.expandedHistory) window.messageLimit=Math.max(1,olderMessageCount(store.data.messages,0));
         const visible=(window.compactMode?(simpleReply?[simpleReply]:[]):store.data.messages.slice(-(window.messageLimit??100))).map(message=>message.text.length>100000?{...message,text:message.text.slice(0,100000),displayTruncated:true}:message),entries=new Map(),upsert=[];
         for (const message of visible) {
           const metadata=JSON.stringify({...message,text:undefined}),previous=window.messageView.entries.get(message.id);
@@ -329,20 +338,22 @@ async function runQueue() {
       for(const attachment of job.attachments??[]){const {file}=attachmentStore.read(attachment);if(attachment.kind==='image')input.push({type:'localImage',path:file});else files.push({name:attachment.name,path:file,bytes:attachment.bytes});}
       if(files.length)input.push({type:'text',text:'[옹기봇 첨부 자료]\n다음은 사용자가 이 질문에 첨부한 파일의 보관 사본입니다. 질문에 필요한 파일 내용을 읽어 답변하세요. 파일 형식을 읽을 수 없으면 그 이유를 알려주세요.\n'+JSON.stringify(files)});
       if(job.skill){
-        const descriptor=fs.openSync(job.skill.path,fs.constants.O_RDONLY|(fs.constants.O_NOFOLLOW??0));try{const stat=fs.fstatSync(descriptor);if(!stat.isFile()||stat.size>256*1024)throw Error('선택한 스킬 파일을 확인해주세요.');const bytes=Buffer.alloc(stat.size+1);let count=0;while(count<bytes.length){const read=fs.readSync(descriptor,bytes,count,bytes.length-count,null);if(!read)break;count+=read;}if(count!==stat.size||fs.fstatSync(descriptor).size!==stat.size||createHash('sha256').update(bytes.subarray(0,count)).digest('hex')!==job.skill.hash)throw Error('선택한 스킬이 변경됐어요. 목록을 새로고침하고 다시 접수해주세요.');}finally{fs.closeSync(descriptor);}input.push({type:'skill',name:job.skill.name,path:job.skill.path});
+        const expected=fs.lstatSync(job.skill.path);if(!expected.isFile()||expected.isSymbolicLink())throw Error('선택한 스킬 파일을 확인해주세요.');
+        const descriptor=fs.openSync(job.skill.path,fs.constants.O_RDONLY|(fs.constants.O_NOFOLLOW??0)|(fs.constants.O_NONBLOCK??0));try{const stat=fs.fstatSync(descriptor);if(!stat.isFile()||stat.size>256*1024||stat.dev!==expected.dev||stat.ino!==expected.ino)throw Error('선택한 스킬 파일을 확인해주세요.');const bytes=Buffer.alloc(stat.size+1);let count=0;while(count<bytes.length){const read=fs.readSync(descriptor,bytes,count,bytes.length-count,null);if(!read)break;count+=read;}if(count!==stat.size||fs.fstatSync(descriptor).size!==stat.size||createHash('sha256').update(bytes.subarray(0,count)).digest('hex')!==job.skill.hash)throw Error('선택한 스킬이 변경됐어요. 목록을 새로고침하고 다시 접수해주세요.');}finally{fs.closeSync(descriptor);}input.push({type:'skill',name:job.skill.name,path:job.skill.path});
       }
       if(job.purpose==='plan'){
         try{const modes=await codex.request('collaborationMode/list',{},5000);if(!Array.isArray(modes?.data)||!modes.data.some(mode=>mode.mode==='plan'))throw Error('plan unavailable');connectionSetup.diagnostics.features.plan='supported';}catch(error){connectionSetup.diagnostics.features.plan=error.code===-32601?'unsupported':'unknown';throw Error('이 CLI의 계획 모드를 확인하지 못했어요. 분석이나 일반 대화로 질문할 수 있어요.');}
       }
       const purposeInstructions={summary:'사용자의 자료와 질문을 핵심 중심으로 요약한다. 사실과 추측을 구분하고 중요한 조건을 보존한다.',analyze:'근거와 가정을 나누어 분석하고 오류·예외·대안과 우선순위를 구체적으로 설명한다.',plan:'실행할 단계, 의존성, 검증 기준과 예외 처리 계획을 작성한다. 계획만으로 파일 변경 권한을 얻지 않는다.'}[job.purpose];
-      const instructions=[job.persona?.instructions,purposeInstructions].filter(Boolean).join('\n\n')||null;
+      const instructions=[job.persona?.instructions,purposeInstructions&&`## 작업 목적\n${purposeInstructions}`].filter(Boolean).join('\n\n')||null;
       if(job.cancelled||quitting||systemSuspended){await finishJob('interrupted');return;}
       let started;
       if(job.purpose==='review'){
         const thread=await codex.request('thread/resume',{...threadParams,threadId:store.data.threadId,config:{model_reasoning_effort:job.selection.effort??null,service_tier:job.selection.serviceTier},developerInstructions:job.persona?.instructions??null});
         reply.reviewThreadModel=typeof thread.model==='string'?thread.model:null;reply.reviewSettings='리뷰 모델·추론·속도는 CLI 전용 설정을 따릅니다. 아래 대화 모델이 실제 리뷰 모델임을 보장하지 않습니다.';
         if(job.cancelled||quitting||systemSuspended){await finishJob('interrupted');return;}
-        try{started=await codex.request('review/start',{threadId:store.data.threadId,delivery:'inline',target:{type:'custom',instructions:job.text+(files.length?'\n사용자가 첨부한 보관 사본: '+JSON.stringify(files):'')}});if(started.reviewThreadId!==store.data.threadId)throw Error('리뷰 대화 ID가 일치하지 않습니다.');connectionSetup.diagnostics.features.review='supported';}catch(error){connectionSetup.diagnostics.features.review=error.code===-32601?'unsupported':'unknown';throw error.code===-32601?Error('이 CLI는 전용 리뷰를 지원하지 않아요. 분석 목적을 사용해주세요.'):error;}
+        const reviewInstructions=[instructions,'## 사용자가 요청한 리뷰 범위\n'+JSON.stringify({text:job.text,...(files.length?{files}:{})})].filter(Boolean).join('\n\n');
+        try{started=await codex.request('review/start',{threadId:store.data.threadId,delivery:'inline',target:{type:'custom',instructions:reviewInstructions}});if(started.reviewThreadId!==store.data.threadId)throw Error('리뷰 대화 ID가 일치하지 않습니다.');connectionSetup.diagnostics.features.review='supported';}catch(error){connectionSetup.diagnostics.features.review=error.code===-32601?'unsupported':'unknown';throw error.code===-32601?Error('이 CLI는 전용 리뷰를 지원하지 않아요. 분석 목적을 사용해주세요.'):error;}
       }else started=await codex.request('turn/start', { threadId: store.data.threadId, clientUserMessageId: job.id, input, model: job.selection.model, effort: job.selection.effort, serviceTierForTurn: job.selection.serviceTier, collaborationMode:{mode:job.purpose==='plan'?'plan':'default',settings:{model:job.selection.model,reasoning_effort:job.selection.effort,developer_instructions:instructions}}, approvalPolicy: 'on-request', approvalsReviewer: 'user', sandboxPolicy: { type: 'readOnly' } });
       if(job.turnId&&job.turnId!==started.turn.id)throw Error('Codex 턴 ID가 시작 이벤트와 다릅니다.');
       job.turnId = started.turn.id;
@@ -395,15 +406,21 @@ codex.on('notification', message => {
     current.phase='generating';reply.images??=[];if(reply.images.length<8&&!reply.images.some(i=>i.itemId===params.item.id))reply.images.push({itemId:params.item.id,status:'pending'});publish();
   }
   if(method==='item/completed'&&(params.item.type==='imageGeneration'||params.item.type==='mcpToolCall'&&Array.isArray(params.item.result?.content)&&params.item.result.content.some(c=>c?.type==='image'))){
-    const job=current,item=params.item,workspace=job.workspace??store.data.settings.workspace,threadId=store.data.threadId;
+    const job=current,source=params.item,workspace=job.workspace??store.data.settings.workspace,threadId=store.data.threadId;
+    const item=source.type==='imageGeneration'?{id:source.id,type:source.type,status:source.status,result:typeof source.result==='string'?source.result:Boolean(source.result),savedPath:typeof source.savedPath==='string'?source.savedPath:undefined,failure:source.failure?{type:String(source.failure.type??'').slice(0,100)}:null}:{id:source.id,type:source.type,status:source.status,result:{isError:Boolean(source.result?.isError),content:source.result.content.filter(c=>c?.type==='image').slice(0,8).map(c=>({type:'image',data:typeof c.data==='string'?c.data:Boolean(c.data)}))}};
+    const chunks=[item.id,item.type,String(item.status),String(Boolean(item.failure)),String(item.failure?.type??''),String(item.result?.isError??''),String(item.savedPath??''),...(item.type==='imageGeneration'?[typeof item.result,String(item.result??'')]:item.result.content.flatMap(c=>[typeof c.data,String(c.data)]))];
+    const bytes=chunks.reduce((sum,chunk)=>sum+Buffer.byteLength(chunk),0),hash=createHash('sha256');for(const chunk of chunks)hash.update(Buffer.byteLength(chunk)+':').update(chunk);
+    const fingerprint=hash.digest('hex');job.imageCompletions??=new Map();
+    if(job.imageCompletions.get(item.id)===fingerprint)return;
     if(reply.timing&&reply.timing.firstReplyAt===undefined&&item.status==='completed')reply.timing.firstReplyAt=performance.timeOrigin+performance.now();
     reply.images??=[];
-    if(reply.images.length<8||reply.images.some(i=>i.itemId===item.id)){
+    if((job.imageCompletions.has(item.id)||job.imageCompletions.size<8)&&(job.imageCompletionCount??0)<16&&(job.imagePendingBytes??0)+bytes<=32*1024*1024&&(reply.images.length<8||reply.images.some(i=>i.itemId===item.id||i.itemId.startsWith(item.id+':')))){
+      job.imageCompletions.set(item.id,fingerprint);job.imageCompletionCount=(job.imageCompletionCount??0)+1;job.imagePendingBytes=(job.imagePendingBytes??0)+bytes;
       if(!reply.images.some(i=>i.itemId===item.id))reply.images.push({itemId:item.id,status:'pending'});
       job.imageWork=(job.imageWork??Promise.resolve()).then(async()=>{
         const images=await responseImages.capture(item,{workspace,threadId});reply.images=[...reply.images.filter(i=>i.itemId!==item.id&&!i.itemId.startsWith(item.id+':')),...images].slice(0,8);publish(true);
-      }).catch(()=>{reply.images=reply.images.map(i=>i.itemId===item.id?{itemId:item.id,status:'failed',error:'이미지 결과를 표시하지 못했어요. 대화를 다시 열어 확인해주세요.'}:i);publish(true);});
-    }else reply.error='이미지는 답변당 최대 8개까지 표시해요.';
+      }).catch(()=>{reply.images=reply.images.map(i=>i.itemId===item.id?{itemId:item.id,status:'failed',error:'이미지 결과를 표시하지 못했어요. 대화를 다시 열어 확인해주세요.'}:i);publish(true);}).finally(()=>{job.imagePendingBytes-=bytes;});
+    }else{reply.error='이미지 처리 한도에 도달했어요. 답변당 최대 8개를 표시하며 대화를 다시 열어 원본 결과를 확인할 수 있어요.';reply.images=reply.images.map(i=>i.itemId===item.id&&i.status==='pending'?{itemId:item.id,status:'failed',error:reply.error}:i);publish(true);}
   }
   if (method === 'item/started' && ['fileChange','commandExecution'].includes(params.item?.type)) {
     current.phase='tool';
@@ -525,7 +542,7 @@ app.whenReady().then(async () => {
   for (const window of [pet, petNotice, panel]) {
     window.rendererReady = false;
     window.webContents.on('did-start-loading',()=>{
-      window.renderGeneration=(window.renderGeneration??0)+1;window.rendererReady=false;
+      window.renderGeneration=(window.renderGeneration??0)+1;window.rendererReady=false;if(window===panel){historySearchRevision++;historySearchTask?.cancel();}
       if(window===panel){if(historyRequest)historyRequest.canceled=true;remoteHistory=null;clearTimeout(simpleHideTimer);simpleHideTimer=null;simpleHideDeadline=null;panel.simpleReady=false;panel.simpleInputProtected=false;panel.simpleDisplayGeneration=(panel.simpleDisplayGeneration??0)+1;panelResize=null;}
       if(window===pet||window===petNotice){noticeHit=null;noticeHitRevision++;}
       // 새 화면이 편집 초안을 잃어도 원래 대기 질문은 보류 상태로 보존한다.
@@ -610,7 +627,7 @@ app.whenReady().then(async () => {
   if(!store.shortcut&&activeShortcut!=='CommandOrControl+Shift+Space'){activeShortcut='CommandOrControl+Shift+Space';store.shortcut=globalShortcut.register(activeShortcut,()=>{pet.show();showPanel();});}
   onBattery=powerMonitor.isOnBatteryPower();
   for(const name of ['lock-screen','unlock-screen','on-battery','on-ac','suspend','resume'])powerMonitor.on(name,()=>{
-    if(['lock-screen','suspend'].includes(name)){if(historyRequest)historyRequest.canceled=true;remoteHistory=null;clearTimeout(simpleHideTimer);simpleHideTimer=null;simpleHideDeadline=null;panel.simpleReady=false;panel.simpleDisplayGeneration=(panel.simpleDisplayGeneration??0)+1;panelResize=null;}
+    if(['lock-screen','suspend'].includes(name)){historySearchRevision++;historySearchTask?.cancel();if(historyRequest)historyRequest.canceled=true;remoteHistory=null;clearTimeout(simpleHideTimer);simpleHideTimer=null;simpleHideDeadline=null;panel.simpleReady=false;panel.simpleDisplayGeneration=(panel.simpleDisplayGeneration??0)+1;panelResize=null;}
     if(name==='lock-screen')screenLocked=true;
     if(name==='unlock-screen')screenLocked=false;
     if(name==='on-battery')onBattery=true;
@@ -636,7 +653,7 @@ app.whenReady().then(async () => {
   if(buddyFeatureSmoke){showPanel();setTimeout(()=>require('../scripts/buddy-features-smoke.cjs')({app,pet,panel,store,codex,personaLibrary,skins}),700);}
   if (modelSmoke&&!attachmentSmoke&&!expansionSmoke) { showPanel(); setTimeout(() => require('../scripts/model-ui-smoke.cjs')({ app,panel,store,codex,modelCatalog }),700); }
   if(deleteSmoke){showPanel();setTimeout(()=>require('../scripts/deletion-ui-smoke.cjs')({app,panel,store,codex}),700);}
-  if (historySmoke) { showPanel(); setTimeout(() => require('../scripts/history-ui-smoke.cjs')({ app,panel,store,codex }),700); }
+  if (historySmoke) { showPanel(); setTimeout(() => require('../scripts/history-ui-smoke.cjs')({ app,panel,store,codex,publish }),700); }
   if (performanceSmoke) {showPanel();setTimeout(()=>require('../scripts/performance-ui-smoke.cjs')({app,panel,store,codex,responseImages,dialog}),700);}
   if (timingSmoke) {showPanel();setTimeout(()=>require('../scripts/timing-ui-smoke.cjs')({app,panel,store,codex}),700);}
   if(resourceSmoke) void require('../scripts/resource-smoke.cjs')({app,pet,panel,store});
@@ -644,7 +661,7 @@ app.whenReady().then(async () => {
   if(attachmentSmoke){showPanel();setTimeout(()=>require('../scripts/attachments-ui-smoke.cjs')({app,panel,store,codex,dialog,shell,publish,getRuntime:()=>({current,queue,modelsStatus,preparing})}),700);}
   if(expansionSmoke){showPanel();setTimeout(()=>require('../scripts/buddy-expansion-smoke.cjs')({app,pet,panel,store,codex,clipboard,dialog,shell,publish,responseImages,setNotificationConstructor:constructor=>{NativeNotification=constructor;},getRuntime:()=>({current,queue,modelsStatus,preparing,queuePaused:queuePauses.size>0,requests,notificationIssue,unreadReply})}),700);}
   if(connectionImageSmoke){showPanel();setTimeout(()=>require('../scripts/connection-image-smoke.cjs')({app,panel,store,codex,shell,responseImages,publish,getRuntime:()=>({current,queue,queuePaused:queuePauses.size>0,connectionState,modelsStatus,modelRefreshing:Boolean(modelRefresh),setup:connectionSetup.state})}),700);}
-  if(chatUISmoke){showPanel();setTimeout(()=>require('../scripts/chat-ui-smoke.cjs')({app,pet,panel,store,codex,publish,showPanel,dialog,responseImages,getState:()=>({simpleHideDeadline,panelResize,detailBounds,simpleReplyId:panel.simpleReplyId,simpleDisplayGeneration:panel.simpleDisplayGeneration,simpleProtected:panel.simpleProtected,simpleReady:panel.simpleReady})}),700);}
+  if(chatUISmoke){showPanel();setTimeout(()=>require('../scripts/chat-ui-smoke.cjs')({app,pet,panel,store,codex,publish,showPanel,dialog,responseImages,getState:()=>({simpleHideDeadline,panelResize,detailBounds,simpleReplyId:panel.simpleReplyId,simpleDisplayGeneration:panel.simpleDisplayGeneration,simpleProtected:panel.simpleProtected,simpleReady:panel.simpleReady,requests})}),700);}
   if (smoke || realSmoke) { showPanel(); require('../scripts/alpha-ui-smoke.cjs')({app,pet,petNotice,panel,store,codex,screen,publish,smoke,realSmoke}); }
 
 }).catch(error => { console.error(error); codex.stop(); dialog.showErrorBox('옹기봇 시작 실패', error.message); app.exit(1); });
@@ -690,7 +707,7 @@ ipcMain.handle('action', async (event, action, payload = {}) => {
     if(historyRequest?.committing)return{ok:false};
     if(historyRequest)historyRequest.canceled=true;publish(true);return{ok:true};
   }
-  if(storageBusy&&!['sync','storage-cancel','show-panel','hide-panel','copy','open-url','response-image','notice-read','panel-tab','pet-layout','pet-pointer-sync','notice-hit','simple-state','resize-start','resize-move','resize-end'].includes(action))throw Error('보관 파일 확인·정리를 마친 뒤 진행해주세요.');
+  if(storageBusy&&!['sync','cancel-search','storage-cancel','show-panel','hide-panel','copy','open-url','response-image','notice-read','panel-tab','pet-layout','pet-pointer-sync','notice-hit','simple-state','resize-start','resize-move','resize-end'].includes(action))throw Error('보관 파일 확인·정리를 마친 뒤 진행해주세요.');
   if(action==='simple-state'){
     if(owner!==panel||typeof payload.ready!=='boolean'||typeof payload.protected!=='boolean'||!Number.isSafeInteger(payload.generation)||payload.contentHeight!==undefined&&(!Number.isFinite(payload.contentHeight)||payload.contentHeight<1||payload.contentHeight>4096))throw Error('말풍선 표시 상태를 확인해주세요.');
     if(!owner.rendererReady||owner.webContents.isDestroyed()||owner.webContents.mainFrame.detached||!owner.isVisible()||!owner.compactMode||owner.activeTab!=='chat'||screenLocked||systemSuspended||payload.conversationId!==store.data.activeConversationId||payload.generation!==owner.simpleDisplayGeneration||payload.replyId!==owner.simpleReplyId)return{ok:false};
@@ -754,6 +771,11 @@ ipcMain.handle('action', async (event, action, payload = {}) => {
     try{await store.saveAsync();}catch(error){for(const target of changed)if(target.reply.timing===target.timing)target.reply.timing=target.previous;publish(true);throw error;}
     publish(true);return{ok:true};
   }
+  let searchAdmission;
+  if(action==='search-conversations'){
+    if(owner!==panel||typeof payload.query!=='string'||!payload.query.trim()||payload.query.length>200)throw Error('검색어는 1~200자로 입력해주세요.');
+    searchAdmission={revision:++historySearchRevision,conversationId:store.data.activeConversationId};historySearchTask?.cancel();
+  }
   while (store?.saving && !['send','cancel','cancel-search','storage-cancel','respond','sync','notice-hit','pet-pointer-sync','pet-layout','drag-start','drag-move','show-panel','hide-panel','copy','open-url','response-image','pause-queue','edit-queued','save-queued','cancel-queue-edit','cancel-all-queued','panel-tab','notice-read'].includes(action)) { try { await store.saving; } catch {} }
   if(attachmentPicking&&['send','new-chat','open-conversation','delete-conversation','pick-workspace','pick-codex','settings','pick-attachments'].includes(action))throw Error('첨부 선택을 마친 뒤 진행해주세요.');
   if(owner===petNotice&&!['sync','show-panel','notice-hit','pet-pointer-sync'].includes(action))throw Error('안내 말풍선에서는 대화 열기만 사용할 수 있습니다.');
@@ -788,10 +810,10 @@ ipcMain.handle('action', async (event, action, payload = {}) => {
         if(quitting||systemSuspended||screenLocked||workspace!==store.data.settings.workspace||process!==codex.process||revision!==skillsRevision)throw Error('스킬 조회 상태가 바뀌었어요.');
         if(next.length>=128)break;if(skill?.enabled!==true||typeof skill.name!=='string'||!skill.name||skill.name.length>200||typeof skill.path!=='string'||skill.path.length>8192||!path.isAbsolute(skill.path)||skill.path.includes('\u0000'))continue;
         try{
-          if((await fs.promises.lstat(skill.path)).isSymbolicLink())continue;
-          const handle=await fs.promises.open(skill.path,fs.constants.O_RDONLY|(fs.constants.O_NOFOLLOW??0));
+          const expected=await fs.promises.lstat(skill.path);if(!expected.isFile()||expected.isSymbolicLink())continue;
+          const handle=await fs.promises.open(skill.path,fs.constants.O_RDONLY|(fs.constants.O_NOFOLLOW??0)|(fs.constants.O_NONBLOCK??0));
           try{
-            const stat=await handle.stat();if(!stat.isFile()||stat.size>256*1024)continue;
+            const stat=await handle.stat();if(!stat.isFile()||stat.size>256*1024||stat.dev!==expected.dev||stat.ino!==expected.ino)continue;
             const bytes=Buffer.alloc(stat.size+1);let count=0;
             while(count<bytes.length){const read=await handle.read(bytes,count,bytes.length-count,null);if(!read.bytesRead)break;count+=read.bytesRead;}
             const after=await handle.stat();
@@ -861,8 +883,7 @@ ipcMain.handle('action', async (event, action, payload = {}) => {
   if (action === 'load-older') {
     if(event.sender!==panel.webContents)throw new Error('대화창에서만 이전 내용을 불러올 수 있습니다.');
     if(historyLoading)throw Error('이전 내용을 불러오는 중입니다.');
-    let count=0,bytes=0;
-    for(let i=store.data.messages.length-(panel.messageLimit??100)-1;i>=0&&count<100;i--){const size=Buffer.byteLength(store.data.messages[i].text);if(count&&bytes+size>256*1024)break;bytes+=size;count++;}
+    const count=olderMessageCount(store.data.messages,panel.messageLimit??100);
     if(count){panel.messageLimit=(panel.messageLimit??100)+count;panel.expandedHistory=true;publish(true);return{ok:true};}
     if(!remoteHistory?.cursor)return{ok:true};
   }
@@ -875,7 +896,7 @@ ipcMain.handle('action', async (event, action, payload = {}) => {
     const selected=store.data.conversations.find(c=>c.id===payload.id&&c.source==='onggi_bot');
     if(!selected)throw new Error('옹기봇에서 만든 대화만 삭제할 수 있습니다.');
     historyLoading=true;historyWarning=null;publish(true);
-    let connection=codex,remoteDeleted=false;
+    let connection=codex,remoteDeleted=false;const deadline=performance.now()+30000;
     const removedThreads=new Set(), relatedThreads=new Set([selected.threadId]);
     const onDeleted=message=>{if(message.method==='thread/deleted'&&relatedThreads.has(message.params?.threadId))removedThreads.add(message.params.threadId);};
     try{
@@ -884,28 +905,30 @@ ipcMain.handle('action', async (event, action, payload = {}) => {
         if(selected.codexPath!==store.data.settings.codexPath||selected.workspace!==store.data.settings.workspace)connection=new CodexConnection();
         connection.on('notification',onDeleted);
         await connection.connect(selected.codexPath||store.data.settings.codexPath,selected.workspace||store.data.settings.workspace);
-        const owned = store.data.conversations.filter(c => c.threadId && c.codexPath === selected.codexPath && c.workspace === selected.workspace), parents = new Map(), deadline = Date.now() + 30000;
-        for (const c of owned) {
-          if (store.pendingDeletion.ids.includes(c.id)) relatedThreads.add(c.threadId);
-          if (Date.now() >= deadline) throw new Error('파생 대화 확인 시간이 초과됐습니다. 로컬 기록을 보존합니다.');
-          try {
-            const response = await connection.request('thread/read',{threadId:c.threadId,includeTurns:false},Math.max(1,deadline-Date.now()));
-            if (response?.thread?.id !== c.threadId) throw new Error('조회된 대화 ID가 일치하지 않습니다.');
-            if (typeof response.thread.parentThreadId === 'string') parents.set(c.threadId,response.thread.parentThreadId);
-          } catch (error) {
-            if (error.code !== -32600 || ![`thread not loaded: ${c.threadId}`,`no rollout found for thread id ${c.threadId}`].includes(error.message)) throw error;
+        const owned=store.data.conversations.filter(c=>c.threadId&&c.codexPath===selected.codexPath&&c.workspace===selected.workspace),parents=new Map();let nextRead=0,readFailure;
+        await Promise.all(Array.from({length:Math.min(4,owned.length)},async()=>{
+          while(nextRead<owned.length&&!readFailure){
+            const c=owned[nextRead++];if(store.pendingDeletion.ids.includes(c.id))relatedThreads.add(c.threadId);
+            try{
+              if(quitting||performance.now()>=deadline)throw Error('파생 대화 확인 시간이 초과됐습니다. 로컬 기록을 보존합니다.');
+              const response=await connection.request('thread/read',{threadId:c.threadId,includeTurns:false},Math.max(1,deadline-performance.now()));
+              if(response?.thread?.id!==c.threadId)throw Error('조회된 대화 ID가 일치하지 않습니다.');
+              if(typeof response.thread.parentThreadId==='string')parents.set(c.threadId,response.thread.parentThreadId);
+            }catch(error){if(error.code!==-32600||![`thread not loaded: ${c.threadId}`,`no rollout found for thread id ${c.threadId}`].includes(error.message))readFailure=error;}
           }
-        }
+        }));
+        if(readFailure)throw readFailure;
         for (const c of owned) {
           let parent = parents.get(c.threadId); const seen = new Set();
           while (parent && !seen.has(parent)) { if (relatedThreads.has(parent)) {relatedThreads.add(c.threadId);break;} seen.add(parent);parent=parents.get(parent); }
         }
         store.beginDeletion(selected.id,{relatedIds:owned.filter(c=>relatedThreads.has(c.threadId)).map(c=>c.id)});
-        try{await connection.request('thread/delete',{threadId:selected.threadId});}
+        if(quitting||performance.now()>=deadline)throw Error('삭제 확인 시간이 초과됐습니다. 로컬 기록을 보존합니다.');
+        try{await connection.request('thread/delete',{threadId:selected.threadId},Math.max(1,deadline-performance.now()));}
         catch(error){
           if(error.code!==-32600||error.message!==`no rollout found for thread id ${selected.threadId}`)throw error;
           let absent=false;
-          try{await connection.request('thread/read',{threadId:selected.threadId,includeTurns:false});}
+          try{if(performance.now()>=deadline)throw Error('삭제 확인 시간이 초과됐습니다.');await connection.request('thread/read',{threadId:selected.threadId,includeTurns:false},Math.max(1,deadline-performance.now()));}
           catch(readError){absent=readError.code===-32600&&[`thread not loaded: ${selected.threadId}`,`no rollout found for thread id ${selected.threadId}`].includes(readError.message);if(!absent)throw readError;}
           if(!absent)throw error;
         }
@@ -914,7 +937,7 @@ ipcMain.handle('action', async (event, action, payload = {}) => {
         for (const threadId of relatedThreads) {
           if (threadId === selected.threadId) continue;
           let absent = false;
-          try { await connection.request('thread/read',{threadId,includeTurns:false}); }
+          try {if(quitting||performance.now()>=deadline)throw Error('파생 세션 삭제 확인 시간이 초과됐습니다. 로컬 기록을 보존합니다.');await connection.request('thread/read',{threadId,includeTurns:false},Math.max(1,deadline-performance.now())); }
           catch (error) { absent = error.code === -32600 && [`thread not loaded: ${threadId}`,`no rollout found for thread id ${threadId}`].includes(error.message); if (!absent) throw error; }
           if (!absent) throw new Error('파생 CLI 세션 삭제를 확인하지 못했습니다. 로컬 기록을 보존합니다.');
           removedThreads.add(threadId);
@@ -938,7 +961,7 @@ ipcMain.handle('action', async (event, action, payload = {}) => {
     if(payload.pinned!==undefined&&typeof payload.pinned!=='boolean')throw Error('즐겨찾기 설정을 확인해주세요.');
     const previous={title:selected.title,titleSource:selected.titleSource,pinned:selected.pinned};
     if(payload.title!==undefined){selected.title=payload.title.trim().normalize('NFC');selected.titleSource='manual';}if(payload.pinned!==undefined)selected.pinned=payload.pinned;
-    try{store.save({includeHistory:false});}catch(error){Object.assign(store.data.conversations.find(item=>item.id===payload.id)??selected,previous);publish(true);throw error;}publish(true);return{ok:true};
+    try{store.save({includeHistory:false});}catch(error){Object.assign(store.data.conversations.find(item=>item.id===payload.id)??selected,previous);publish(true);throw error;}store.registryRevision++;publish(true);return{ok:true};
   }
   if(action==='storage-cancel'){if(owner!==panel)throw Error('대화창에서 보관 작업을 중단해주세요.');storageRevision++;return{ok:true};}
   if(['storage-inspect','storage-quarantine','storage-restore'].includes(action)){
@@ -954,36 +977,54 @@ ipcMain.handle('action', async (event, action, payload = {}) => {
     }finally{storageBusy=false;publish(true);}
   }
   if(action==='cancel-search'){
-    if(owner!==panel)throw Error('대화창에서 검색을 중단해주세요.');historySearchRevision++;return{ok:true};
+    if(owner!==panel)throw Error('대화창에서 검색을 중단해주세요.');historySearchRevision++;historySearchTask?.cancel();return{ok:true};
   }
   if(action==='search-conversations'){
     if(owner!==panel||typeof payload.query!=='string'||!payload.query.trim()||payload.query.length>200)throw Error('검색어는 1~200자로 입력해주세요.');
-    const revision=++historySearchRevision,generation=owner.renderGeneration,query=payload.query.trim().toLocaleLowerCase(),matches=[],catalog=[...store.data.conversations].sort((a,b)=>b.updatedAt-a.updatedAt);let scanned=0,bytes=0;
-    for(const conversation of catalog){
-      if(revision!==historySearchRevision||quitting||owner.isDestroyed()||generation!==owner.renderGeneration)return{ok:true,canceled:true,matches:[],scanned,limited:true};
-      if(scanned>=100||bytes>=32*1024*1024||matches.length>=50)break;if(store.pendingDeletion?.ids.includes(conversation.id))continue;
-      try{
-        const size=(await fs.promises.stat(path.join(store.historyDirectory,conversation.id+'.json'))).size;
-        if(revision!==historySearchRevision||quitting||owner.isDestroyed()||generation!==owner.renderGeneration)return{ok:true,canceled:true,matches:[],scanned,limited:true};
-        if(store.pendingDeletion?.ids.includes(conversation.id)||!store.data.conversations.some(item=>item.id===conversation.id))continue;
-        if(bytes+size>32*1024*1024)break;bytes+=size;scanned++;
-        const history=conversation.id===store.data.activeConversationId?{messages:store.data.messages}:store.readHistory(conversation.id);
-        let hit,at;for(const item of history.messages){at=item.text.toLocaleLowerCase().indexOf(query);if(at!==-1){hit=item;break;}}
-        if(hit)matches.push({id:conversation.id,snippet:hit.text.slice(Math.max(0,at-30),at+120).replace(/\s+/g,' ')});
-      }catch{}
-      await new Promise(resolve=>setImmediate(resolve));
-    }
-    if(revision!==historySearchRevision||quitting||owner.isDestroyed()||generation!==owner.renderGeneration)return{ok:true,canceled:true,matches:[],scanned,limited:true};
-    return{ok:true,matches,scanned,limited:scanned<catalog.length||matches.length>=50};
+    const revision=searchAdmission.revision,generation=requestGeneration,conversationId=searchAdmission.conversationId,query=payload.query.trim().toLocaleLowerCase(),matches=[],failures=[],catalog=[...store.data.conversations].sort((a,b)=>b.updatedAt-a.updatedAt);let visited=0,scanned=0,failed=0,bytes=0,limitReason=null,pending,canceled=false;
+    const previousSearch=historySearchTask;previousSearch?.cancel();if(previousSearch?.termination)await previousSearch.termination;
+    if(revision!==historySearchRevision||quitting||owner.isDestroyed()||generation!==owner.renderGeneration||conversationId!==store.data.activeConversationId||screenLocked||systemSuspended)return{ok:true,canceled:true,matches:[],visited,scanned,failed,failures,incomplete:true,limited:false};
+    const file=path.join(__dirname,'history-search-worker.cjs').replace('app.asar'+path.sep,'app.asar.unpacked'+path.sep),worker=new Worker(file,{workerData:{historyDirectory:store.historyDirectory}});
+    const task={closed:false,exited:false,termination:null,cancel(){this.closed=true;pending?.reject(Error('검색이 중단됐어요.'));if(!this.exited&&!this.termination)this.termination=worker.terminate();}};historySearchTask=task;
+    worker.on('message',result=>{if(pending&&result?.id===pending.id){pending.resolve(result);}});
+    worker.on('error',error=>{task.closed=true;pending?.reject(error);});
+    worker.on('exit',()=>{task.exited=true;task.closed=true;pending?.reject(Error('검색 작업이 종료됐어요.'));});
+    try{
+      for(const conversation of catalog){
+        if(revision!==historySearchRevision||quitting||owner.isDestroyed()||generation!==owner.renderGeneration||conversationId!==store.data.activeConversationId||screenLocked||systemSuspended){canceled=true;break;}
+        if(store.pendingDeletion?.ids.includes(conversation.id))continue;
+        if(visited>=100||bytes>=32*1024*1024||matches.length>=50){limitReason=visited>=100?'records':matches.length>=50?'matches':'bytes';break;}
+        visited++;
+        try{
+          if(task.closed)throw Error('검색 작업이 종료됐어요.');
+          const result=await new Promise((resolve,reject)=>{
+            const timer=setTimeout(()=>{reject(Error('검색 시간이 초과됐어요.'));task.cancel();},10000);
+            pending={id:conversation.id,resolve:value=>{clearTimeout(timer);pending=null;resolve(value);},reject:error=>{clearTimeout(timer);pending=null;reject(error);}};
+            try{worker.postMessage({id:conversation.id,query,remainingBytes:32*1024*1024-bytes,...(conversation.id===conversationId?{activeMessages:store.data.messages}:{})});}catch(error){pending.reject(error);}
+          });
+          if(revision!==historySearchRevision||quitting||owner.isDestroyed()||generation!==owner.renderGeneration||conversationId!==store.data.activeConversationId||screenLocked||systemSuspended){canceled=true;break;}
+          if(result.limited){limitReason='bytes';break;}bytes+=result.bytes;
+          if(store.pendingDeletion?.ids.includes(conversation.id)||!store.data.conversations.some(item=>item.id===conversation.id))continue;
+          if(result.scanned){scanned++;if(typeof result.match==='string')matches.push({id:conversation.id,snippet:result.match});}
+          else{failed++;if(failures.length<10)failures.push({id:conversation.id,reason:result.error});}
+        }catch{
+          if(revision!==historySearchRevision||quitting||owner.isDestroyed()||generation!==owner.renderGeneration||conversationId!==store.data.activeConversationId||screenLocked||systemSuspended){canceled=true;break;}
+          failed++;if(failures.length<10)failures.push({id:conversation.id,reason:'unreadable'});if(task.closed){limitReason='worker';break;}
+        }
+      }
+    }finally{task.cancel();if(task.termination)await task.termination;if(historySearchTask===task)historySearchTask=null;}
+    if(canceled||revision!==historySearchRevision||quitting||owner.isDestroyed()||generation!==owner.renderGeneration||conversationId!==store.data.activeConversationId||screenLocked||systemSuspended)return{ok:true,canceled:true,matches:[],visited,scanned,failed,failures,incomplete:true,limited:Boolean(limitReason)};
+    return{ok:true,matches,visited,scanned,failed,failures,incomplete:failed>0||Boolean(limitReason),limited:Boolean(limitReason),limitReason};
   }
+
   if(action==='export-conversation'){
     if(owner!==panel||store.pendingDeletion?.ids.includes(payload.id))throw Error('내보낼 대화를 확인해주세요.');
     const selected=store.data.conversations.find(item=>item.id===payload.id&&item.source==='onggi_bot');if(!selected)throw Error('옹기봇에서 만든 대화를 선택해주세요.');
-    const messages=structuredClone(selected.id===store.data.activeConversationId?store.data.messages:store.readHistory(selected.id).messages),title=selected.title;
+    const messages=(selected.id===store.data.activeConversationId?store.data.messages:store.readHistory(selected.id).messages).map(message=>({role:message.role,mode:message.mode,status:message.status,text:message.text,error:message.error&&typeof message.error==='object'?structuredClone(message.error):message.error,attachments:message.attachments?.map(attachment=>({name:attachment.name,bytes:attachment.bytes})),images:message.images?.map(image=>({status:image.status,id:image.id,mime:image.mime,bytes:image.bytes}))})),title=selected.title;
     const destination=await dialog.showSaveDialog(panel,{title:'대화 Markdown 저장',defaultPath:'버디-대화-'+selected.id.slice(0,8)+'.md',filters:[{name:'Markdown',extensions:['md']}]});if(destination.canceled)return{ok:true,canceled:true};
     if(quitting||owner.isDestroyed()||!store.data.conversations.some(item=>item.id===selected.id)||store.pendingDeletion?.ids.includes(selected.id)||typeof destination.filePath!=='string'||!path.isAbsolute(destination.filePath)||path.extname(destination.filePath).toLowerCase()!=='.md')throw Error('대화나 저장 위치가 바뀌었어요. 다시 선택해주세요.');
     const file=destination.filePath,folder=file.slice(0,-3)+'.assets',parts=['# '+title.replace(/[\\`*_{}[\]<>#]/g,'')+'\n','옹기봇 대화 · '+new Date().toISOString()+'\n'];
-    let total=0,unavailable=0,imageCount=0,createdFolder=false,handle,fileIdentity;
+    let total=0,unavailable=0,imageCount=0,createdFolder=false,handle,fileIdentity,writeStarted=false;
     try{
       handle=await fs.promises.open(file,'wx',0o600);fileIdentity=await handle.stat();
       for(const message of messages){
@@ -1003,11 +1044,11 @@ ipcMain.handle('action', async (event, action, payload = {}) => {
         }
       }
       if(quitting||owner.isDestroyed()||!store.data.conversations.some(item=>item.id===selected.id)||store.pendingDeletion?.ids.includes(selected.id))throw Error('대화나 창 상태가 바뀌었습니다.');
-      await handle.writeFile(parts.join('\n'));await handle.sync();await handle.close();handle=null;
+      writeStarted=true;await handle.writeFile(parts.join('\n'));await handle.sync();await handle.close();handle=null;
     }catch(error){
-      if(handle){await handle.close().catch(()=>{});const remaining=await fs.promises.lstat(file).catch(()=>null);if(remaining?.isFile()&&remaining.dev===fileIdentity?.dev&&remaining.ino===fileIdentity?.ino&&remaining.birthtimeMs===fileIdentity?.birthtimeMs)await fs.promises.rm(file,{force:true}).catch(()=>{});}
+      if(handle){await handle.close().catch(()=>{});const remaining=await fs.promises.lstat(file).catch(()=>null);if(!writeStarted&&remaining?.isFile()&&fileIdentity&&['dev','ino','birthtimeMs','size','mtimeMs','ctimeMs'].every(key=>remaining[key]===fileIdentity[key]))await fs.promises.rm(file,{force:true}).catch(()=>{});}
       if(createdFolder)await fs.promises.rmdir(folder).catch(()=>{});
-      throw Error(error.code==='EEXIST'?'같은 이름의 파일이나 이미지 폴더가 있어요. 새 이름을 선택해주세요.':'대화를 내보내지 못했어요. 저장 위치와 공간을 확인해주세요. 부분 이미지 사본이 남았다면 선택한 폴더에서 확인할 수 있어요.');
+      throw Error(error.code==='EEXIST'?'같은 이름의 파일이나 이미지 폴더가 있어요. 새 이름을 선택해주세요.':'대화를 내보내지 못했어요. 저장 위치와 공간을 확인해주세요. 부분 이미지 사본이나 Markdown 파일이 남았다면 선택한 폴더에서 확인할 수 있어요.');
     }
     return{ok:true,imageCount,unavailable};
   }
@@ -1073,12 +1114,24 @@ ipcMain.handle('action', async (event, action, payload = {}) => {
             if(oldReply?.turnId&&oldReply.turnId!==turn.id)throw Error('Codex 답변과 사용자 기록의 연결이 일치하지 않습니다.');
             if(oldIndex>=0)previousIndex=oldIndex+1;
             if(!input&&!oldUser)continue;
-            const review=turn.items.findLast(item=>item.type==='exitedReviewMode'&&item.review.trim()),output=(review?.review??turn.items.filter(item=>['agentMessage','plan'].includes(item.type)).map(item=>item.text).join('\n\n')).slice(0,100000),status=turn.status==='completed'?'completed':turn.status==='failed'?'failed':'interrupted';
+            const review=turn.items.findLast(item=>item.type==='exitedReviewMode'&&item.review.trim());
+            const remoteText=review?.review??turn.items.filter(item=>['agentMessage','plan'].includes(item.type)).map(item=>item.text).join('\n\n');
+            const fullLocalReply=oldReply?.status==='completed'&&!oldReply.textTruncated&&oldReply.text;
+            const retainLocal=oldReply?.status==='completed'&&(turn.status!=='completed'||
+              fullLocalReply&&(!remoteText||remoteText.length>100000||oldReply.text.length>remoteText.length&&oldReply.text.startsWith(remoteText)));
+            const output=retainLocal?oldReply.text:remoteText.slice(0,100000);
+            const status=retainLocal||turn.status==='completed'?'completed':turn.status==='failed'?'failed':'interrupted';
             const timestamp=Number.isFinite(turn.startedAt)&&turn.startedAt>=0?(turn.startedAt<1e12?turn.startedAt*1000:turn.startedAt):null,images=[];
-            for(const item of turn.items){if(images.length>=8)break;if(item.type==='imageGeneration'||item.type==='mcpToolCall'&&Array.isArray(item.result?.content)&&item.result.content.some(content=>content?.type==='image'))images.push(...await responseImages.capture(item,{workspace,threadId:selected.threadId}));}
+            for(const item of retainLocal?[]:turn.items){if(images.length>=8)break;if(item.type==='imageGeneration'||item.type==='mcpToolCall'&&Array.isArray(item.result?.content)&&item.result.content.some(content=>content?.type==='image'))images.push(...await responseImages.capture(item,{workspace,threadId:selected.threadId}));}
             if(operation.canceled||quitting||panel!==owner||owner.isDestroyed()||event.sender.isDestroyed()||event.senderFrame!==event.sender.mainFrame||event.sender.mainFrame.detached||operation.generation!==owner.renderGeneration||connectionProcess!==codex.process||workspace!==store.data.settings.workspace||executable!==store.data.settings.codexPath||systemSuspended||screenLocked||store.data.activeConversationId!==selected.id||store.data.messages!==previous||store.pendingDeletion?.ids.includes(selected.id))throw Error('기록 조회 중 대화나 연결이 바뀌었습니다.');
             const user={...oldUser,id:oldUser?.id??`${turn.id}:user`,turnId:turn.id,role:'user',text:oldUser?.text??input,mode:'codex',status,createdAt:oldUser?.createdAt??timestamp??selected.createdAt},block=[user];
-            if(output||oldReply||images.length)block.push({...oldReply,id:oldReply?.id??`${turn.id}:reply`,turnId:turn.id,role:'assistant',text:output||oldReply?.text||'',...(images.length?{images:images.slice(0,8)}:{}),mode:'codex',status,createdAt:oldReply?.createdAt??user.createdAt});
+            if(output||oldReply||images.length){
+              const mergedImages=new Map((oldReply?.images??[]).map(image=>[image.itemId,image]));
+              for(const image of images)if(image.status==='ready'||mergedImages.get(image.itemId)?.status!=='ready')mergedImages.set(image.itemId,image);
+              block.push({...oldReply,id:oldReply?.id??`${turn.id}:reply`,turnId:turn.id,role:'assistant',
+                text:output||oldReply?.text||'',textTruncated:(!retainLocal&&remoteText?remoteText.length>100000:oldReply?.textTruncated)||undefined,
+                ...(mergedImages.size?{images:[...mergedImages.values()].slice(0,8)}:{}),mode:'codex',status,createdAt:oldReply?.createdAt??user.createdAt});
+            }
             for(const message of block)recordBytes+=Buffer.byteLength(JSON.stringify(message))+1;
             if(recordBytes>32*1024*1024)throw Error('병합 기록이 저장 용량을 초과합니다. 저장된 기록을 유지합니다.');
             records.push({oldIndex,block,timestamp});
@@ -1113,7 +1166,14 @@ ipcMain.handle('action', async (event, action, payload = {}) => {
           if(!operation.canceled&&!quitting&&panel===owner&&!owner.isDestroyed()&&!event.sender.isDestroyed()&&event.senderFrame===event.sender.mainFrame&&!event.sender.mainFrame.detached&&operation.generation===owner.renderGeneration&&connectionProcess===codex.process&&workspace===store.data.settings.workspace&&executable===store.data.settings.codexPath&&!systemSuspended&&!screenLocked&&store.data.activeConversationId===selected.id&&!store.pendingDeletion?.ids.includes(selected.id)){
             for(const turn of turns)seenTurns.add(turn.id);if(nextCursor)seenCursors.add(nextCursor);
             remoteHistory=paging?{conversationId:selected.id,process:connectionProcess,generation:operation.generation,cursor:nextCursor,seenCursors,seenTurns,oldestMessageId:records[0]?.block[0].id??continuation?.oldestMessageId??null}:null;
-            if(!opening){panel.messageLimit=messages.length;panel.expandedHistory=true;}
+            if(!opening){
+              const previousLimit=Math.min(previous.length,panel.messageLimit??100);
+              const firstVisibleId=previous.at(-previousLimit)?.id;
+              const firstVisibleIndex=messages.findIndex(message=>message.id===firstVisibleId);
+              const visibleCount=firstVisibleIndex<0?previousLimit:messages.length-firstVisibleIndex;
+              panel.messageLimit=Math.max(1,visibleCount+olderMessageCount(messages,visibleCount));
+              panel.expandedHistory=true;
+            }
           }
           connectionState='connected';
         }catch(error){historyWarning=store.writeBlocked?`원격 기록 병합을 확정하지 못했습니다. 현재 화면·원본·저널을 보존합니다: ${error.message}`:`저장된 기록을 표시합니다. Codex 기록 확인: ${error.message}`;}
@@ -1171,16 +1231,14 @@ ipcMain.handle('action', async (event, action, payload = {}) => {
       if(quitting||owner.isDestroyed()||systemSuspended||screenLocked||conversationId!==store.data.activeConversationId||!store.data.messages.includes(message)||!message.images.includes(image))throw Error('대화 상태가 바뀌었어요. 이미지를 다시 선택해주세요.');
       const bytes=responseImages.read(image).bytes,file=selected.filePath;
       if(typeof file!=='string'||!path.isAbsolute(file)||file.includes('\u0000')||path.extname(file).toLowerCase()!=='.'+extension)throw Error('원본 형식에 맞는 확장자로 저장해주세요.');
-      let handle,fileIdentity;
+      let handle;
       try{
-        handle=await fs.promises.open(file,'wx',0o600);fileIdentity=await handle.stat();await handle.writeFile(bytes);await handle.sync();
+        handle=await fs.promises.open(file,'wx',0o600);await handle.writeFile(bytes);await handle.sync();
       }catch(error){
         if(handle){
           await handle.close().catch(()=>{});handle=null;
-          const remaining=await fs.promises.lstat(file).catch(()=>null);
-          if(remaining?.isFile()&&remaining.dev===fileIdentity?.dev&&remaining.ino===fileIdentity?.ino&&remaining.birthtimeMs===fileIdentity?.birthtimeMs)await fs.promises.rm(file,{force:true}).catch(()=>{});
         }
-        throw Error(error.code==='EEXIST'?'같은 이름의 파일이 있어요. 새 이름으로 저장해주세요.':'이미지를 저장하지 못했어요. 위치와 저장 공간을 확인해주세요.');
+        throw Error(error.code==='EEXIST'?'같은 이름의 파일이 있어요. 새 이름으로 저장해주세요.':'이미지를 저장하지 못했어요. 위치와 저장 공간을 확인해주세요. 부분 파일이 남았다면 선택한 폴더에서 확인한 뒤 새 이름으로 저장해주세요.');
       }finally{await handle?.close();}
       return{ok:true};
     }
@@ -1294,16 +1352,20 @@ ipcMain.handle('action', async (event, action, payload = {}) => {
       let source;
       if(payload.archiveToken){if(!packArchiveCatalog.some(e=>e.token===payload.archiveToken))throw Error('보관한 팩을 찾을 수 없습니다.');source=path.join(packLibrary.directory,payload.archiveToken);}
       else{const selection=await dialog.showOpenDialog(panel,{title:'캐릭터 폴더 미리보기',properties:['openDirectory']});if(selection.canceled)return{ok:true,canceled:true};source=selection.filePaths[0];}
+      if(quitting||panel!==owner||owner.isDestroyed()||requestGeneration!==owner.renderGeneration||event.senderFrame!==event.sender.mainFrame||event.sender.mainFrame.detached)
+        throw Error('캐릭터 팩을 준비하던 창이 바뀌었습니다. 다시 선택해주세요.');
       const loaded=loadPack(source);await assetValidator.validate(loaded);
+      if(quitting||panel!==owner||owner.isDestroyed()||requestGeneration!==owner.renderGeneration||event.senderFrame!==event.sender.mainFrame||event.sender.mainFrame.detached)
+        throw Error('캐릭터 팩을 준비하던 창이 바뀌었습니다. 다시 선택해주세요.');
       const installed=packs.find(p=>!p.temporary&&p.manifest.id===loaded.manifest.id);
       if(installed?.builtin)throw Error('기본 캐릭터는 덮어쓸 수 없습니다. 다른 ID로 가져와주세요.');
-      packPreview={token:randomUUID(),pack:loaded,expiresAt:Date.now()+600000};
+      packPreview={token:randomUUID(),pack:loaded,expiresAt:Date.now()+600000,generation:requestGeneration};
       return{ok:true,token:packPreview.token,pack:{...loaded.manifest,thumbnail:loaded.thumbnail,errorThumbnail:loaded.errorThumbnail,hasPoster:loaded.hasPoster},installedVersion:installed?.manifest.version??null};
     }finally{packImporting=false;}
   }
   if(action==='pack-apply'||action==='pack-remove'){
     if(owner!==panel||packImporting||store.writeBlocked||store.saving||current||queue.length||preparing||historyLoading||modelRefresh)throw Error('진행 중인 작업을 마친 뒤 캐릭터를 변경해주세요.');
-    const selected=action==='pack-remove'?packs.find(p=>p.manifest.id===payload.id):packPreview?.token===payload.token&&packPreview.expiresAt>Date.now()?packPreview.pack:null;
+    const selected=action==='pack-remove'?packs.find(p=>p.manifest.id===payload.id):packPreview?.token===payload.token&&packPreview.generation===requestGeneration&&packPreview.expiresAt>Date.now()?packPreview.pack:null;
     if(!selected)throw Error('미리보기나 캐릭터를 다시 선택해주세요.');
     const installed=packs.find(p=>!p.temporary&&p.manifest.id===selected.manifest.id);
     if(installed?.builtin||action==='pack-remove'&&(!installed||payload.confirmed!==true))throw Error('사용자 팩을 선택해 제거 범위를 확인해주세요.');
@@ -1409,13 +1471,17 @@ ipcMain.handle('action', async (event, action, payload = {}) => {
       const previous=store.data.settings.personaModes[payload.characterId];store.data.settings.personaModes[payload.characterId]=payload.mode;
       try{store.save({includeHistory:false});}catch(error){store.data.settings.personaModes[payload.characterId]=previous;throw error;}
     }
+    let saved;
     if(action==='persona-manage'){
       if(payload.operation==='archive'&&(store.data.settings.personaModes[payload.characterId]===payload.id||current||queue.length))throw Error('다른 말투를 선택하고 작업을 마친 뒤 보관해주세요.');
-      personaLibrary.manage(payload.characterId,payload.operation,payload);
+      const managed=personaLibrary.manage(payload.characterId,payload.operation,payload);if(payload.operation==='reset')saved={contentHash:managed.contentHash};
     }
     if(action==='persona-reload')personaLibrary=new PersonaLibrary(personaLibrary.root,packs);
-    if(action==='persona-save')personaLibrary.save(payload.characterId,payload.id,payload.text);
-    personaCatalog=personaLibrary.catalog();catalogVersion++;publish();return{ok:true};
+    if(action==='persona-save'){
+      try{saved=personaLibrary.save(payload.characterId,payload.id,payload.text,payload.expectedHash);}
+      catch(error){if(error.code==='PERSONA_CONFLICT')return{ok:false,conflict:true,currentHash:error.currentHash,currentText:error.currentText};throw error;}
+    }
+    personaCatalog=personaLibrary.catalog();catalogVersion++;publish();return{ok:true,...saved};
   }
   if (action === 'new-chat') {
     if (current || queue.length || preparing || historyLoading) throw new Error('실행과 대기 작업을 먼저 완료하거나 취소해주세요.');
@@ -1443,7 +1509,7 @@ ipcMain.handle('action', async (event, action, payload = {}) => {
     const attachments=attachmentIds.map(id=>{const record=pendingAttachments.get(id);if(!record||record.editingJobId||record.conversationId!==store.data.activeConversationId||reservedAttachments.has(id))throw Error('이 대화에 선택한 첨부를 확인해주세요.');return record.attachment;});
     if(attachments.reduce((sum,a)=>sum+a.bytes,0)>32*1024*1024)throw Error('첨부 합계는 32MiB까지 가능해요.');
     if(queue.length+preparing>=10)throw Error('대기 요청은 최대 10개입니다.');
-    const settings={...store.data.settings},messages=store.data.messages,text=payload.text.trim()?payload.text:'첨부한 자료를 확인해주세요.',id=randomUUID(),replyId=randomUUID();
+    const settings={...store.data.settings},messages=store.data.messages,conversationId=store.data.activeConversationId,text=payload.text.trim()?payload.text:'첨부한 자료를 확인해주세요.',id=randomUUID(),replyId=randomUUID();
     const purpose=payload.purpose??'conversation';if(!['conversation','summary','analyze','plan','review'].includes(purpose))throw Error('작업 목적을 확인해주세요.');
     const skill=payload.skillToken?skillsWorkspace===settings.workspace?skillsCatalog.find(item=>item.token===payload.skillToken):null:null;
     if(payload.skillToken&&!skill)throw Error('스킬 목록을 새로 확인하고 선택해주세요.');
@@ -1457,7 +1523,7 @@ ipcMain.handle('action', async (event, action, payload = {}) => {
       while(store.saving)await store.saving;
       if(mode==='codex')await refreshModels(true);
       while(store.saving)await store.saving;
-      if(quitting||systemSuspended||screenLocked||packImporting||historyLoading||store.writeBlocked||messages!==store.data.messages||settings.workspace!==store.data.settings.workspace||settings.codexPath!==store.data.settings.codexPath||owner.isDestroyed()||event.senderFrame!==event.sender.mainFrame||store.pendingDeletion?.ids.includes(store.data.activeConversationId))throw Error('접수 중 대화 상태가 바뀌었습니다. 질문은 실행하지 않았습니다.');
+      if(quitting||systemSuspended||screenLocked||packImporting||historyLoading||store.writeBlocked||messages!==store.data.messages||conversationId!=null&&conversationId!==store.data.activeConversationId||settings.workspace!==store.data.settings.workspace||settings.codexPath!==store.data.settings.codexPath||owner.isDestroyed()||requestGeneration!==owner.renderGeneration||event.senderFrame!==event.sender.mainFrame||event.sender.mainFrame.detached||store.pendingDeletion?.ids.includes(conversationId))throw Error('접수 중 대화 상태가 바뀌었습니다. 질문은 실행하지 않았습니다.');
       const selection=mode==='demo'?{model:null,effort:null,modelName:'체험'}:modelCatalog.resolve(settings.model,settings.effort,settings.serviceTier);
       const pendingReplies = store.data.messages.filter(m => m.role === 'assistant' && ['queued','running'].includes(m.status)).length;
       let storedBytes = 2;
@@ -1475,7 +1541,7 @@ ipcMain.handle('action', async (event, action, payload = {}) => {
       remoteHistory=null;messages.push({id,role:'user',text,status:'queued',createdAt:Date.now(),mode,...selection,purpose,...(skillMetadata?{skill:skillMetadata}:{}),...(attachments.length?{attachments}:{})},{id:replyId,role:'assistant',text:'',status:'queued',createdAt:Date.now(),mode,...selection,purpose,persona:personaMetadata,...(skillMetadata?{skill:skillMetadata}:{}),...(timing?{timing}:{})});
       try{await store.saveAsync();}catch(error){if(!store.writeBlocked){for(let i=messages.length-1;i>=0;i--)if(messages[i].id===id||messages[i].id===replyId)messages.splice(i,1);}else for(const message of messages)if([id,replyId].includes(message.id))message.status='interrupted';publish(true);throw error;}
       for(const record of pendingAttachments.values())if(record.conversationId===null)record.conversationId=store.data.activeConversationId;
-      if(quitting||systemSuspended||screenLocked||[...queuePauses].some(reason=>reason!=='manual')&&queue.length||store.writeBlocked||owner.isDestroyed()||event.senderFrame!==event.sender.mainFrame){
+      if(quitting||systemSuspended||screenLocked||[...queuePauses].some(reason=>reason!=='manual')&&queue.length||store.writeBlocked||owner.isDestroyed()||requestGeneration!==owner.renderGeneration||event.senderFrame!==event.sender.mainFrame||event.sender.mainFrame.detached){
         for(const message of messages)if([id,replyId].includes(message.id)){message.status='interrupted';if(message.role==='assistant')message.error='접수 중 중단되어 실행하지 않았습니다.';}
         try{await store.saveAsync();}catch(error){store.writeBlocked=true;store.warning=error.message;}
         throw Error('접수 중 중단되어 질문을 실행하지 않았습니다.');
@@ -1531,7 +1597,12 @@ ipcMain.handle('action', async (event, action, payload = {}) => {
     } else {
       if(payload.decision==='accept'&&(request.details?.truncated||request.method==='item/fileChange/requestApproval'&&(!Array.isArray(request.details?.changes)||!request.details.changes.length||request.details.changes.some(change=>!change||typeof change.path!=='string'||typeof change.diff!=='string'))))throw Error('변경 미리보기를 확인할 수 없어 이 창에서는 허용하지 않습니다.');
       const network=request.params.networkApprovalContext;
-      if(payload.decision==='accept'&&network!==undefined&&network!==null&&(!network||typeof network!=='object'||typeof network.host!=='string'||!network.host||network.host.length>253||!['http','https','socks5Tcp','socks5Udp'].includes(network.protocol)||/[\u0000-\u001f]/u.test(network.host+network.protocol)))throw Error('네트워크 승인 대상을 확인할 수 없습니다.');
+      if(payload.decision==='accept'&&network!==undefined&&network!==null&&(!network||typeof network!=='object'||typeof network.host!=='string'||!network.host.trim()||network.host.trim()!==network.host||/[\s/?#@\\]/u.test(network.host)||network.host.length>253||!['http','https','socks5Tcp','socks5Udp'].includes(network.protocol)||/[\u0000-\u001f]/u.test(network.host+network.protocol)))throw Error('네트워크 승인 대상을 확인할 수 없습니다.');
+      if(payload.decision==='accept'&&request.method==='item/commandExecution/requestApproval'){
+        const command=request.params.command??request.details?.command;
+        if((request.params.kind===undefined?'command':request.params.kind)!=='command')throw Error('이 종류의 실행 내용을 확인할 수 없어 이 창에서는 허용하지 않습니다.');
+        if(command!==undefined&&command!==null&&(typeof command!=='string'||!command.trim()||/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/u.test(command))||!network&&(typeof command!=='string'||!command.trim()))throw Error('실행 명령을 확인할 수 없어 이 창에서는 허용하지 않습니다.');
+      }
       if (!['accept','decline','cancel'].includes(payload.decision)) throw new Error('승인 값이 올바르지 않습니다.');
       result = { decision: payload.decision };
     }
@@ -1555,7 +1626,7 @@ app.on('before-quit', event => {
   if (quitSaved) return;
   event.preventDefault();
   if (quitting) return;
-  quitting = true;clearTimeout(simpleHideTimer);simpleHideTimer=null;simpleHideDeadline=null;panelResize=null;for(const {notification}of liveNotices.values())try{notification.close();}catch{}liveNotices.clear(); clearTimeout(current?.timeout); current?.resolve?.(); clearTimeout(replyStateTimer); clearInterval(petPointerTimer); globalShortcut.unregisterAll();
+  quitting = true;historySearchTask?.cancel();clearTimeout(simpleHideTimer);simpleHideTimer=null;simpleHideDeadline=null;panelResize=null;for(const {notification}of liveNotices.values())try{notification.close();}catch{}liveNotices.clear(); clearTimeout(current?.timeout); current?.resolve?.(); clearTimeout(replyStateTimer); clearInterval(petPointerTimer); globalShortcut.unregisterAll();
   clearTimeout(reconnectTimer);connectionSetup.dispose();connectionProbe?.stop();
   codex.stop();
   void (async () => {

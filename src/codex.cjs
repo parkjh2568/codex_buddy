@@ -55,6 +55,8 @@ class CodexConnection extends EventEmitter {
               const params = message.params ?? {};
               if (typeof params !== 'object' || Array.isArray(params) || message.params === null) throw new Error('이벤트 인수가 올바르지 않습니다.');
               message.params = params;
+              // 항목 수 제한 외에도 Map 키로 보관할 식별자의 UTF-8 크기를 제한한다.
+              for(const id of [params.threadId,params.turnId,params.itemId,params.item?.id,params.turn?.id])if(id!==undefined&&(typeof id!=='string'||!id||Buffer.byteLength(id,'utf8')>1024))throw new Error('이벤트 식별자는 비어 있지 않은 1024바이트 이하 문자열이어야 합니다.');
               if (['turn/started','turn/completed'].includes(message.method) && (!params.turn || typeof params.turn.id !== 'string' || !params.turn.id || typeof params.threadId !== 'string' || !params.threadId)) throw new Error('턴 정보가 올바르지 않습니다.');
               if (message.method === 'turn/completed' && !['completed','interrupted','failed'].includes(params.turn.status)) throw new Error('턴 종료 상태가 올바르지 않습니다.');
               if (['item/started','item/completed'].includes(message.method) && (!params.item || typeof params.item.id !== 'string' || typeof params.item.type !== 'string' || (['agentMessage','plan'].includes(params.item.type) && typeof params.item.text !== 'string') || ['enteredReviewMode','exitedReviewMode'].includes(params.item.type)&&typeof params.item.review!=='string')) throw new Error('항목 정보가 올바르지 않습니다.');
@@ -74,7 +76,7 @@ class CodexConnection extends EventEmitter {
               else {
                 if(request.turnContext){
                   const context=request.turnContext,id=message.result?.turn?.id;
-                  if(typeof id!=='string'||!id){const failure=new Error('Codex 턴 시작 응답 ID가 올바르지 않습니다.');request.reject(failure);onExit(failure);child.kill();return;}
+                  if(typeof id!=='string'||!id||Buffer.byteLength(id,'utf8')>1024){const failure=new Error('Codex 턴 시작 응답 ID가 올바르지 않습니다. 1024바이트 이하 문자열이 필요합니다.');request.reject(failure);onExit(failure);child.kill();return;}
                   context.turnId=id;
                   if(this.turnContext===context){
                     this.active={threadId:context.threadId,turnId:id};

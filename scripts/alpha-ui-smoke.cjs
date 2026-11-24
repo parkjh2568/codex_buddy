@@ -5,9 +5,12 @@ module.exports = ({app,pet,petNotice,panel,store,codex,screen,publish,smoke,real
       try {
         const artifactRoot=path.resolve(process.env.ONGGI_SMOKE_ROOT??path.join(__dirname,'..','artifacts'));fs.mkdirSync(artifactRoot,{recursive:true});
         if (smoke) {
-          const petCheck = await pet.webContents.executeJavaScript(`(async()=>{
+          const cursorPoint=screen.getCursorScreenPoint,petBounds=pet.getBounds(),outsidePet={x:petBounds.x-1000,y:petBounds.y-1000};let petCheck;
+          screen.getCursorScreenPoint=()=>outsidePet;
+          try{petCheck = await pet.webContents.executeJavaScript(`(async()=>{
             const character=document.querySelector('#pet-character'),bubble=document.querySelector('#pet-bubble'),controls=document.querySelector('.pet-controls');
             const size={width:parseFloat(getComputedStyle(character).width),height:parseFloat(getComputedStyle(character).height)};
+            await window.onggi.action('pet-pointer-sync',${JSON.stringify(outsidePet)});character.dispatchEvent(new PointerEvent('pointerleave'));
             for(let i=0;i<8;i++){await window.onggi.action('sync');await new Promise(r=>setTimeout(r,400));}
             const hiddenAfterIdle=bubble.hidden;
             character.dispatchEvent(new PointerEvent('pointerenter'));
@@ -23,7 +26,7 @@ module.exports = ({app,pet,petNotice,panel,store,codex,screen,publish,smoke,real
             await window.onggi.action('hide-panel');
             character.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter'}));
             return {...size,hiddenAfterIdle,visibleOnHover,hiddenAfterHover,controlsVisibleOnHover,menuFocused,controlsHiddenAfterHover,visibleWhileHovered};
-          })()`);
+          })()`);}finally{screen.getCursorScreenPoint=cursorPoint;}
           if(petCheck.width!==75||petCheck.height!==95||!petCheck.hiddenAfterIdle||!petCheck.visibleOnHover||!petCheck.hiddenAfterHover||!petCheck.visibleWhileHovered||!petCheck.controlsVisibleOnHover||!petCheck.menuFocused||!petCheck.controlsHiddenAfterHover||!panel.isVisible())throw new Error('PET_SIZE_BUBBLE_FAILED '+JSON.stringify(petCheck));
           const compact = pet.getBounds();
           if(compact.width!==120||compact.height!==143)throw new Error('PET_COMPACT_WINDOW_FAILED '+JSON.stringify(compact));
@@ -38,7 +41,7 @@ module.exports = ({app,pet,petNotice,panel,store,codex,screen,publish,smoke,real
           const moved = pet.getBounds();
           if(moved.x!==compact.x-40||moved.y!==compact.y-30)throw new Error('PET_ABSOLUTE_DRAG_FAILED '+JSON.stringify({compact,moved}));
           console.log('PET_COMPACT_ABSOLUTE_DRAG_OK',JSON.stringify({compact,moved}));
-          fs.writeFileSync(path.join(artifactRoot,'pet-ui-smoke.json'),JSON.stringify({verifiedAt:new Date().toISOString(),status:'passed',result:petCheck},null,2));
+          fs.writeFileSync(path.join(artifactRoot,'pet-ui-smoke.json'),JSON.stringify({verifiedAt:new Date().toISOString(),status:'passed',cursorFixture:'outside-pet-during-idle-and-synthetic-hover',physicalOsPointer:false,result:petCheck},null,2));
           console.log('PET_HALF_SIZE_AUTO_HIDE_OK',JSON.stringify(petCheck));
           await require('../scripts/pet-notice-smoke.cjs')({pet,petNotice,panel,screen});
         }
@@ -75,7 +78,8 @@ module.exports = ({app,pet,petNotice,panel,store,codex,screen,publish,smoke,real
         }
         fs.writeFileSync(path.join(artifactRoot,realSmoke ? 'alpha-real.png' : 'alpha-panel.png'), (await panel.webContents.capturePage()).toPNG());
         fs.writeFileSync(path.join(artifactRoot,'alpha-pet.png'), (await pet.webContents.capturePage()).toPNG());
-        if (!result.switched || !result.text.includes(realSmoke ? '옹기봇' : '체험 모드예요') || result.cards !== 2 || !store.data.messages.some(m => m.role === 'assistant' && m.status === 'completed')) throw new Error(JSON.stringify(result));
+        const expectedCards=realSmoke&&process.argv.includes('--real-mini-smoke')?1:2;
+        if (!result.switched || !result.text.includes(realSmoke ? '옹기봇' : '체험 모드예요') || result.cards !== expectedCards || !store.data.messages.some(m => m.role === 'assistant' && m.status === 'completed')) throw new Error(JSON.stringify(result));
         if (!realSmoke) {
           const sample = '## Markdown 표시\n\n**굵게**와 *기울임*, `inline()`을 지원해요.\n\n**알파인 리눅스(Alpine Linux)**는 작은 배포판이에요.\n\n- 첫 번째\n- 두 번째\n\n> 작은 인용문\n\n| 기능 | 상태 |\n| --- | --- |\n| 표 | 완료 |\n\n```js\nconst onggi = "친구";\nconsole.log(onggi);\n```\n\n[공식 문서](https://learn.chatgpt.com/docs/app-server)\n\n<script>window.__onggiInjected = true</script>\n[나쁜 링크](javascript:alert(1))\n![외부 이미지](https://example.com/tracker.png)';
           store.data.messages.find(m => m.role === 'assistant').text = sample; publish();

@@ -3,7 +3,7 @@ module.exports=async({app,pet,petNotice,panel,store,codex,powerMonitor,dialog,pu
   const originalDialog=dialog.showOpenDialog;
   const act=(action,payload={})=>panel.webContents.executeJavaScript(`window.onggi.action(${JSON.stringify(action)},${JSON.stringify(payload)})`);
   const wait=ms=>new Promise(resolve=>setTimeout(resolve,ms));
-  const results={verifiedAt:new Date().toISOString(),platform:process.platform,realModel:false,windowsNativeVerified:process.platform==='win32'};
+  const results={verifiedAt:new Date().toISOString(),platform:process.platform,realModel:false,windowsNativeVerified:false,systemEvents:'synthetic-emission',physicalLockSuspendBatteryVerified:false};
   try{
     const artifactRoot=path.resolve(process.env.ONGGI_SMOKE_ROOT??path.join(__dirname,'..','artifacts'));fs.mkdirSync(artifactRoot,{recursive:true});
     if(process.argv.includes('--no-pack-fixture')){
@@ -47,7 +47,7 @@ module.exports=async({app,pet,petNotice,panel,store,codex,powerMonitor,dialog,pu
     const preview=await act('pack-preview');assert.equal(store.data.settings.characterId,before);assert.ok(!fs.existsSync(path.join(store.directory,'characters/smoke-custom')));
     fs.writeFileSync(path.join(source,'idle.svg'),'changed after preview');await act('pack-apply',{token:preview.token,select:true});assert.equal(store.data.settings.characterId,'smoke-custom');assert.ok(fs.readFileSync(path.join(store.directory,'characters/smoke-custom/idle.svg'),'utf8').includes('<svg'));
     fs.copyFileSync(path.join(__dirname,'../characters/onggi-sprout/idle.svg'),path.join(source,'idle.svg'));manifest.version='2.0.0';fs.writeFileSync(path.join(source,'manifest.json'),JSON.stringify(manifest));
-    await act('persona-save',{characterId:'smoke-custom',id:'friendly',text:'# 내 수정본\n보존한다.'});const next=await act('pack-preview');await assert.rejects(act('pack-apply',{token:next.token}),/업데이트/);await act('pack-apply',{token:next.token,replace:true});assert.equal(fs.readFileSync(path.join(store.directory,'personas/smoke-custom/friendly.md'),'utf8'),'# 내 수정본\n보존한다.');
+    await act('persona-save',{characterId:'smoke-custom',id:'friendly',expectedHash:require('node:crypto').createHash('sha256').update(fs.readFileSync(path.join(store.directory,'personas/smoke-custom/friendly.md'))).digest('hex'),text:'# 내 수정본\n보존한다.'});const next=await act('pack-preview');await assert.rejects(act('pack-apply',{token:next.token}),/업데이트/);await act('pack-apply',{token:next.token,replace:true});assert.equal(fs.readFileSync(path.join(store.directory,'personas/smoke-custom/friendly.md'),'utf8'),'# 내 수정본\n보존한다.');
     dialog.showOpenDialog=async()=>({canceled:false,filePaths:[store.directory]});const exported=await act('pack-export',{id:'smoke-custom',includeEdited:true});assert.ok(fs.existsSync(path.join(exported.destination,'manifest.json')));assert.ok(!fs.existsSync(path.join(exported.destination,'state.json')));
     await act('pack-remove',{id:'smoke-custom',confirmed:true});assert.equal(store.data.settings.characterId,'onggi-clip');assert.ok(fs.existsSync(path.join(store.directory,'personas/smoke-custom/friendly.md')));
     const archive=fs.readdirSync(store.directory).filter(n=>n.startsWith('.archive-')).find(n=>JSON.parse(fs.readFileSync(path.join(store.directory,n,'manifest.json'))).version==='2.0.0');

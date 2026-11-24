@@ -26,7 +26,7 @@ module.exports=async({app,panel,store,codex})=>{
       return{nav,settingsOpened,blocks,secondId:second.id,thirdId:third.id,hiddenWhenOff};
     })()`);
     const measured=store.data.messages.filter(m=>m.role==='assistant'&&m.timing);
-    if(result.nav.join(',')!=='chat,history'||!result.settingsOpened||!result.hiddenWhenOff||result.blocks.length!==2)throw new Error('Timing UI or settings toggle failed '+JSON.stringify(result));
+    if(result.nav.join(',')!=='chat,history,settings'||!result.settingsOpened||!result.hiddenWhenOff||result.blocks.length!==2)throw new Error('Timing UI or settings toggle failed '+JSON.stringify(result));
     for(const reply of measured.slice(0,2)){
       const t=reply.timing;
       if(!(t.submittedAt<=t.receivedAt&&t.receivedAt<=t.cliSentAt&&t.cliSentAt<=t.firstReplyAt&&t.firstReplyAt<t.completedAt&&t.completedAt<=t.renderedAt))throw new Error('Invalid timing order '+JSON.stringify(t));

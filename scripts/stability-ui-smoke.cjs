@@ -25,7 +25,7 @@ module.exports = async ({app,pet,petNotice,panel,store,showPanel}) => {
     if(await panel.webContents.executeJavaScript(`document.querySelectorAll('.character-card').length`))throw Error('Hidden panel rebuilt character DOM');
     showPanel('settings',true);await new Promise(r=>setTimeout(r,150));if((await panel.webContents.executeJavaScript(`document.querySelectorAll('.character-card').length`))!==fs.readdirSync(path.join(__dirname,'../characters')).length)throw Error('Hidden catalog did not render when shown');showPanel('chat',true);
     const focusShadows=[];
-    for(const skinId of ['paper','night','mono']) {
+    for(const skinId of ['paper','night','mono','classic']) {
       await panel.webContents.executeJavaScript(`window.onggi.action('settings',{skinId:${JSON.stringify(skinId)}})`);
       await new Promise(r=>setTimeout(r,80));
       const focus=await panel.webContents.executeJavaScript(`(()=>{document.querySelector('#prompt').focus();const composer=document.querySelector('.composer');return{focused:composer.matches(':focus-within'),shadow:getComputedStyle(composer).boxShadow};})()`);

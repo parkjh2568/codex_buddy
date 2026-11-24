@@ -143,4 +143,4 @@
 
 Architect는 저장/성능/전달 trade-off, Implementation Engineer는 현재 UI와 미구현 계약, Reviewer는 실기/플랫폼/보존과 성장 주입 해석, SRE는 최신 해시·앱 원본·별도 재현을 대조했다. [확인 장부](../../artifacts/remaining-work-2026-10-14/verification.json)에 소스 유지·새 문서/링크와 재현 범위를 기록한다.
 
-참고: [현재 작업 목록](../../TASKS.md), [UI 상세 계획](CHAT_UI_REDESIGN_PLAN_2026-10-13.md), [성능 결과](PERFORMANCE_OPTIMIZATION_RESULT_2026-10-13.md), [최종 검증](../../artifacts/performance-team-2026-10-13/final-verification.json), [레거시 정리](LEGACY_CLEANUP_RESULT_2026-10-13.md), [최초 연결](../FIRST_RUN_REVIEW.md), [빌드 가이드](../BUILD_GUIDE.md).
+참고: [현재 작업 목록](../../TASKS.md), [UI 상세 계획](CHAT_UI_REDESIGN_PLAN_2026-10-13.md), [성능 결과](PERFORMANCE_OPTIMIZATION_RESULT_2026-10-13.md), [최종 검증](../../artifacts/performance-team-2026-10-13/final-verification.json), [레거시 정리](LEGACY_CLEANUP_RESULT_2026-10-13.md), [최초 연결](DOCUMENTATION_BEFORE_CLEANUP_2026-10-21.md#first_run_review), [빌드 가이드](../BUILD_GUIDE.md).

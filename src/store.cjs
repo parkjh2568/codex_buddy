@@ -26,17 +26,18 @@ class Store {
     try{for(const file of [this.file,this.file+'.tmp',this.journalFile,this.journalFile+'.tmp',this.deleteFile,this.deleteFile+'.tmp']){let stat;try{stat=fs.lstatSync(file);}catch(error){if(error.code==='ENOENT')continue;throw error;}if(stat.isSymbolicLink()||!stat.isFile())throw Error('저장 파일의 link/directory 경로를 확인해주세요.');}}catch(error){this.writeBlocked=true;this.warning=error.message;return;}
     try { this.recoverPendingSave(); }
     catch(error) { this.writeBlocked=true;this.warning=`저장 복구가 필요합니다. 원본을 보존했습니다: ${error.message}`; }
+    let stateBackup=null;
     try {
       if (fs.existsSync(this.file)) {
         if(fs.realpathSync(this.directory)!==this.directory)throw Error('저장 폴더 경로가 바뀌었습니다.');
-        const descriptor=fs.openSync(this.file,fs.constants.O_RDONLY|(fs.constants.O_NOFOLLOW??0));let saved;
+        const descriptor=fs.openSync(this.file,fs.constants.O_RDONLY|(fs.constants.O_NOFOLLOW??0)|(fs.constants.O_NONBLOCK??0));let saved;
         try{
           const stat=fs.fstatSync(descriptor);if(!stat.isFile()||stat.size>8*1024*1024)throw Error('저장 파일 크기·경로를 확인해주세요.');
           const bytes=Buffer.alloc(stat.size+1);let count=0;
           while(count<bytes.length){const read=fs.readSync(descriptor,bytes,count,bytes.length-count,null);if(!read)break;count+=read;}
           const after=fs.fstatSync(descriptor),named=fs.lstatSync(this.file);
           if(count!==stat.size||!named.isFile()||['dev','ino','size','mtimeMs','ctimeMs'].some(key=>after[key]!==stat[key]||named[key]!==stat[key])||fs.realpathSync(this.directory)!==this.directory)throw Error('저장 파일이 읽는 중 변경됐어요. 원본을 확인해주세요.');
-          saved=JSON.parse(new TextDecoder('utf-8',{fatal:true,ignoreBOM:true}).decode(bytes.subarray(0,count)));
+          stateBackup=bytes.subarray(0,count);saved=JSON.parse(new TextDecoder('utf-8',{fatal:true,ignoreBOM:true}).decode(stateBackup));
         }finally{fs.closeSync(descriptor);}
         if (![1,2].includes(saved.version)) throw new Error('저장 형식이 올바르지 않습니다.');
         if (!saved.settings || typeof saved.settings !== 'object' || Array.isArray(saved.settings)) throw new Error('저장 설정 형식이 올바르지 않습니다.');
@@ -67,13 +68,15 @@ class Store {
           for (const [id, mode] of Object.entries(saved.settings.personaModes)) if (/^[a-z][a-z0-9-]{0,47}$/.test(id) && typeof mode === 'string' && /^[a-z][a-z0-9-]{0,47}$/.test(mode)) settings.personaModes[id] = mode; else repaired = true;
         }
         this.data.settings = settings;
-        if (repaired) { fs.copyFileSync(this.file,this.file+'.backup-settings-'+Date.now()+'-'+randomUUID(),fs.constants.COPYFILE_EXCL); this.warning = '잘못된 저장 설정 일부를 기본값으로 복구했습니다. 원본 파일을 백업했습니다.'; }
+        if (repaired) { fs.writeFileSync(this.file+'.backup-settings-'+Date.now()+'-'+randomUUID(),stateBackup,{flag:'wx',mode:0o600}); this.warning = '잘못된 저장 설정 일부를 기본값으로 복구했습니다. 원본 파일을 백업했습니다.'; }
         if (saved.version === 1) {
           if (!Array.isArray(saved.messages)) throw new Error('저장 형식이 올바르지 않습니다.');
           this.data.threadId = typeof saved.threadId === 'string' ? saved.threadId : null;
           this.data.messages = saved.messages;
-          fs.copyFileSync(this.file, this.file + `.backup-v1-${Date.now()}-${randomUUID()}`,fs.constants.COPYFILE_EXCL);
-          this.save();
+          try {
+            fs.writeFileSync(this.file + `.backup-v1-${Date.now()}-${randomUUID()}`,stateBackup,{flag:'wx',mode:0o600});
+            this.save();
+          } catch(error) { this.writeBlocked=true; throw error; }
         } else {
           if (!Array.isArray(saved.conversations)) throw new Error('대화 목록 형식이 올바르지 않습니다.');
           const ids = new Set();
@@ -88,33 +91,38 @@ class Store {
           });
           const active = this.data.conversations.find(c => c.id === saved.activeConversationId);
           if (active) {
-            const history = this.readHistory(active.id);
+            let history, snapshot;
+            try { history = this.readHistory(active.id); snapshot = createHash('sha256').update(JSON.stringify(history)).digest('hex'); }
+            catch(error) { this.writeBlocked=true; throw error; }
             this.data.activeConversationId = active.id;
             this.data.threadId = typeof history.threadId === 'string' ? history.threadId : null;
             this.data.messages = history.messages;
-            this.snapshot = JSON.stringify(history);
+            this.snapshot = snapshot;
           }
         }
       }
     } catch (error) {
       this.warning = `대화 기록을 읽지 못했습니다. 원본을 보존했습니다: ${error.message}`;
-      if (fs.existsSync(this.file)) { try { fs.copyFileSync(this.file, this.file + `.backup-${Date.now()}-${randomUUID()}`,fs.constants.COPYFILE_EXCL); } catch (backupError) { this.writeBlocked = true; this.warning += ' 백업도 실패하여 쓰기를 차단했습니다: ' + backupError.message; } }
+      if(stateBackup!==null){try{fs.writeFileSync(this.file+`.backup-${Date.now()}-${randomUUID()}`,stateBackup,{flag:'wx',mode:0o600});}catch(backupError){this.writeBlocked=true;this.warning+=' 백업도 실패하여 쓰기를 차단했습니다: '+backupError.message;}}
+      else{this.writeBlocked=true;this.warning+=' 안전한 원본 백업을 읽지 못해 쓰기를 차단했습니다.';}
       this.data.activeConversationId = null; this.data.threadId = null; this.data.messages = [];
     }
-    try {this.recoverPendingDeletion();}catch{}
+    if(!this.writeBlocked)try {this.recoverPendingDeletion();}catch{}
   }
   readHistory(id) {
     if(fs.realpathSync(this.historyDirectory)!==this.historyDirectory)throw Error('대화 폴더 경로가 바뀌었습니다.');
     if (typeof id !== 'string' || !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(id)) throw new Error('대화 ID 형식이 올바르지 않습니다.');
     const file = path.join(this.historyDirectory, id + '.json');
-    if (fs.lstatSync(file).isSymbolicLink() || !fs.statSync(file).isFile() || fs.statSync(file).size > 32 * 1024 * 1024) throw new Error('대화 기록 경로·크기를 확인해주세요.');
-    const descriptor=fs.openSync(file,fs.constants.O_RDONLY|(fs.constants.O_NOFOLLOW??0));let saved;
+    const expected=fs.lstatSync(file);
+    if (!expected.isFile() || expected.isSymbolicLink() || expected.size > 32 * 1024 * 1024) throw new Error('대화 기록 경로·크기를 확인해주세요.');
+    const descriptor=fs.openSync(file,fs.constants.O_RDONLY|(fs.constants.O_NOFOLLOW??0)|(fs.constants.O_NONBLOCK??0));let saved;
     try{
       const stat=fs.fstatSync(descriptor);if(!stat.isFile()||stat.size>32*1024*1024||fs.realpathSync(this.historyDirectory)!==this.historyDirectory)throw Error('대화 기록 경로·크기를 확인해주세요.');
+      if(['dev','ino','size','mtimeMs','ctimeMs'].some(key=>stat[key]!==expected[key]))throw Error('대화 기록이 여는 중 변경됐어요. 원본을 확인해주세요.');
       const bytes=Buffer.alloc(stat.size+1);let count=0;
       while(count<bytes.length){const read=fs.readSync(descriptor,bytes,count,bytes.length-count,null);if(!read)break;count+=read;}
-      const after=fs.fstatSync(descriptor);
-      if(count!==stat.size||['dev','ino','size','mtimeMs','ctimeMs'].some(key=>after[key]!==stat[key])||fs.realpathSync(this.historyDirectory)!==this.historyDirectory)throw Error('대화 기록이 읽는 중 변경됐어요. 원본을 확인해주세요.');
+      const after=fs.fstatSync(descriptor),named=fs.lstatSync(file);
+      if(count!==stat.size||!named.isFile()||named.isSymbolicLink()||['dev','ino','size','mtimeMs','ctimeMs'].some(key=>after[key]!==stat[key]||named[key]!==stat[key])||fs.realpathSync(this.historyDirectory)!==this.historyDirectory)throw Error('대화 기록이 읽는 중 변경됐어요. 원본을 확인해주세요.');
       saved=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(bytes.subarray(0,count)));
     }finally{fs.closeSync(descriptor);}
     if (saved.id !== id || saved.source !== 'onggi_bot' || !Array.isArray(saved.messages)) throw new Error('대화 기록 형식이 올바르지 않습니다.');
@@ -182,7 +190,7 @@ class Store {
       if(fs.existsSync(this.journalFile))throw new Error('진행 중인 저장 복구를 먼저 완료해주세요.');
       if(fs.realpathSync(this.directory)!==this.directory||fs.realpathSync(this.historyDirectory)!==this.historyDirectory)throw Error('삭제 폴더 경로를 확인해주세요.');
       for(const file of [this.deleteFile,this.file,this.file+'.tmp']){let stat;try{stat=fs.lstatSync(file);}catch(error){if(error.code==='ENOENT')continue;throw error;}if(stat.isSymbolicLink()||!stat.isFile())throw Error('삭제 파일 경로를 확인해주세요.');}
-      const descriptor=fs.openSync(this.deleteFile,fs.constants.O_RDONLY|(fs.constants.O_NOFOLLOW??0));let pending;
+      const descriptor=fs.openSync(this.deleteFile,fs.constants.O_RDONLY|(fs.constants.O_NOFOLLOW??0)|(fs.constants.O_NONBLOCK??0));let pending;
       try{
         const stat=fs.fstatSync(descriptor);if(!stat.isFile()||stat.size>65536)throw Error('삭제 저널 크기·경로를 확인해주세요.');
         const bytes=Buffer.alloc(stat.size+1);let count=0;
@@ -204,7 +212,7 @@ class Store {
         let staged;try{staged=fs.lstatSync(file+'.tmp');}catch(error){if(error.code!=='ENOENT')throw error;}if(staged&&(staged.isSymbolicLink()||!staged.isFile()))throw Error('삭제 임시 파일 경로를 확인해주세요.');
         if(fs.existsSync(file)){
           if(fs.lstatSync(file).isSymbolicLink()||!fs.statSync(file).isFile())throw Error('삭제 기록 경로를 확인해주세요.');
-          const descriptor=fs.openSync(file,fs.constants.O_RDONLY|(fs.constants.O_NOFOLLOW??0));let history;
+          const descriptor=fs.openSync(file,fs.constants.O_RDONLY|(fs.constants.O_NOFOLLOW??0)|(fs.constants.O_NONBLOCK??0));let history;
           try{
             const stat=fs.fstatSync(descriptor);if(!stat.isFile()||stat.size>32*1024*1024)throw Error('삭제 기록 크기·경로를 확인해주세요.');
             const bytes=Buffer.alloc(stat.size+1);let count=0;
@@ -232,7 +240,7 @@ class Store {
     if (!fs.existsSync(this.journalFile)) return;
     if(fs.realpathSync(this.directory)!==this.directory||fs.realpathSync(this.historyDirectory)!==this.historyDirectory)throw Error('저장 복구 폴더의 경로가 바뀌었습니다.');
     for(const file of [this.journalFile,this.file,this.file+'.tmp']){let stat;try{stat=fs.lstatSync(file);}catch(error){if(error.code==='ENOENT')continue;throw error;}if(stat.isSymbolicLink()||!stat.isFile())throw Error('복구 파일의 link/directory 경로를 확인해주세요.');}
-    const descriptor=fs.openSync(this.journalFile,fs.constants.O_RDONLY|(fs.constants.O_NOFOLLOW??0));let journal;
+    const descriptor=fs.openSync(this.journalFile,fs.constants.O_RDONLY|(fs.constants.O_NOFOLLOW??0)|(fs.constants.O_NONBLOCK??0));let journal;
     try{
       const stat=fs.fstatSync(descriptor);if(!stat.isFile()||stat.size>1024)throw Error('저장 저널 크기·경로를 확인해주세요.');
       const bytes=Buffer.alloc(stat.size+1);let count=0;
@@ -248,7 +256,7 @@ class Store {
     const statePath=statePending?this.file+'.tmp':this.file,historyPath=historyPending?historyFile+'.tmp':historyFile;
     const recovered=[];
     for(const [file,limit]of [[statePath,8*1024*1024],[historyPath,32*1024*1024]]){
-      const descriptor=fs.openSync(file,fs.constants.O_RDONLY|(fs.constants.O_NOFOLLOW??0));
+      const descriptor=fs.openSync(file,fs.constants.O_RDONLY|(fs.constants.O_NOFOLLOW??0)|(fs.constants.O_NONBLOCK??0));
       try{
         const stat=fs.fstatSync(descriptor);if(!stat.isFile()||stat.size>limit)throw Error('복구 파일 크기·경로를 확인해주세요.');
         const bytes=Buffer.alloc(stat.size+1);let count=0;
@@ -279,11 +287,12 @@ class Store {
         this.snapshot=null;includeHistory=true;
       }
       const active=this.data.conversations.find(c=>c.id===this.data.activeConversationId);
-      let serialized=null,historyFile=null;
+      let serialized=null,fingerprint=null,historyFile=null;
       if (active && includeHistory) {
         serialized=JSON.stringify({id:active.id,source:'onggi_bot',threadId:this.data.threadId,messages:this.data.messages});
         if (Buffer.byteLength(serialized)>32*1024*1024) throw new Error('대화 기록이 32MiB를 초과했습니다. 새 대화를 시작해주세요.');
-        if (serialized!==this.snapshot) {
+        fingerprint=createHash('sha256').update(serialized).digest('hex');
+        if (fingerprint!==this.snapshot) {
           historyFile=path.join(this.historyDirectory,active.id+'.json');
           active.threadId=this.data.threadId;
           active.preview=(this.data.messages.findLast(m=>m.text)?.text??'').replace(/\s+/g,' ').slice(0,120);
@@ -301,13 +310,13 @@ class Store {
       if (historyFile) fs.writeFileSync(historyFile+'.tmp',serialized,{mode:0o600,flag:'wx'});
       fs.writeFileSync(this.file+'.tmp',stateText,{mode:0o600,flag:'wx'});
       if (historyFile) {
-        const journal=JSON.stringify({version:1,historyId:active.id,stateHash:createHash('sha256').update(stateText).digest('hex'),historyHash:createHash('sha256').update(serialized).digest('hex')});
+        const journal=JSON.stringify({version:1,historyId:active.id,stateHash:createHash('sha256').update(stateText).digest('hex'),historyHash:fingerprint});
         fs.writeFileSync(this.journalFile+'.tmp',journal,{mode:0o600,flag:'wx'});fs.renameSync(this.journalFile+'.tmp',this.journalFile);
         fs.renameSync(historyFile+'.tmp',historyFile);
       }
       fs.renameSync(this.file+'.tmp',this.file);
       if (historyFile) fs.unlinkSync(this.journalFile);
-      if (serialized!==null) this.snapshot=serialized;
+      if (serialized!==null) this.snapshot=fingerprint;
       if (historyFile) this.registryRevision++;
     } catch(error) {
       this.data.activeConversationId=previousId;this.data.conversations=previousIndex;this.snapshot=previousSnapshot;
@@ -374,16 +383,24 @@ class Store {
   openConversation(id) {
     const selected = this.data.conversations.find(c => c.id === id && c.source === 'onggi_bot');
     if (!selected) throw new Error('옹기봇에서 만든 대화만 열 수 있습니다.');
+    // 같은 대화를 다시 열 때는 아직 저장하지 않은 본문을 먼저 확정한다.
+    const reopening = selected.id === this.data.activeConversationId;
+    if (reopening) this.save();
     const saved = this.readHistory(selected.id);
-    this.save();
+    // 읽기 뒤 직렬화·해시도 실패할 수 있으므로 활성 상태를 바꾸기 전에 준비한다.
+    const serialized=JSON.stringify(saved), snapshot=createHash('sha256').update(serialized).digest('hex');
+    const threadId=typeof saved.threadId==='string'?saved.threadId:null;
+    // 정상 v2는 방금 계산한 본문과 같다. 비정규 형식·정규화 후 한도 초과는 기존 저장 검사를 유지한다.
+    const includeHistory=Object.keys(saved).join(',')!=='id,source,threadId,messages'||saved.threadId!==threadId||Buffer.byteLength(serialized)>32*1024*1024;
+    if (!reopening) this.save();
     const previous={id:this.data.activeConversationId,threadId:this.data.threadId,messages:this.data.messages,settings:{...this.data.settings},snapshot:this.snapshot};
     this.data.activeConversationId = selected.id;
-    this.data.threadId = typeof saved.threadId === 'string' ? saved.threadId : null;
+    this.data.threadId = threadId;
     this.data.messages = saved.messages;
     if (selected.workspace) this.data.settings.workspace = selected.workspace;
     if (selected.codexPath) this.data.settings.codexPath = selected.codexPath;
-    this.data.settings.demo = selected.mode === 'demo'; this.snapshot = JSON.stringify(saved);
-    try {this.save();}catch(error){this.data.activeConversationId=previous.id;this.data.threadId=previous.threadId;this.data.messages=previous.messages;this.data.settings=previous.settings;this.snapshot=previous.snapshot;throw error;}
+    this.data.settings.demo = selected.mode === 'demo'; this.snapshot = snapshot;
+    try {this.save({includeHistory});}catch(error){this.data.activeConversationId=previous.id;this.data.threadId=previous.threadId;this.data.messages=previous.messages;this.data.settings=previous.settings;this.snapshot=previous.snapshot;throw error;}
     return selected;
   }
 }

@@ -91,7 +91,7 @@ module.exports = async ({app,pet,panel,screen,store,getAnchor,getIgnoring}) => {
       await window.onggi.action('drag-end');
     })()`);
     const savedPartial=pet.getBounds();
-    const result={verifiedAt:new Date().toISOString(),platform:process.platform,profileDirectory:store.directory,status:'passed',properties,initial,moved,top,partial,expanded,anchorPreserved:true,externalMoveSynchronized:true,reset,hit,fullyOffScreenAllowed:true,savedPartial,restartPreserved:false,unreachableRestartRecovered:false,windowsNativeVerified:process.platform==='win32'};
+    const result={verifiedAt:new Date().toISOString(),platform:process.platform,profileDirectory:store.directory,status:'passed',properties,initial,moved,top,partial,expanded,anchorPreserved:true,externalMoveSynchronized:true,reset,hit,fullyOffScreenAllowed:true,savedPartial,restartPreserved:false,unreachableRestartRecovered:false,windowsNativeVerified:false,windowsWindowPolicyVerified:process.platform==='win32',nativePointerVerified:false,interaction:'synthetic-ipc'};
     fs.writeFileSync(artifact,JSON.stringify(result,null,2));console.log('FLOATING_UI_OK',JSON.stringify(result));app.quit();
   } catch(error) {console.error(error.stack);app.exit(1);}
 };

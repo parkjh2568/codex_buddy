@@ -88,7 +88,7 @@ test('native/MCP images become bounded owned references, deduplicate and survive
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'onggi-images-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));let decodes=0;
   const library=new ResponseImages(path.join(root,'images'),{validate:async p=>{decodes++;p.thumbnail=p.imageFiles[0].source;return p;}});
   const [image]=await library.capture({type:'imageGeneration',id:'native',status:'completed',result:png.toString('base64')});assert.equal(image.status,'ready');assert.equal(image.width,2);assert.ok(!JSON.stringify(image).includes(png.toString('base64')));
-  const [mcp]=await library.capture({type:'mcpToolCall',id:'mcp',status:'completed',result:{content:[{type:'image',data:png.toString('base64')}]}});assert.equal(mcp.id,image.id);assert.equal(fs.readdirSync(library.root).length,1);assert.equal(decodes,2);
+  const [mcp]=await library.capture({type:'mcpToolCall',id:'mcp',status:'completed',result:{content:[{type:'image',data:png.toString('base64')}]}});assert.equal(mcp.id,image.id);assert.equal(fs.readdirSync(library.root).length,1);assert.equal(decodes,1);
   const store=new Store(path.join(root,'store'),{demo:false});store.data.messages=[{id:'assistant',role:'assistant',text:'',status:'completed',images:[image]}];store.save();const restored=new Store(store.directory,{});assert.equal(restored.data.messages[0].images[0].id,image.id);assert.ok(library.read(image).bytes.equals(png));
   const toString=Buffer.prototype.toString;t.mock.method(Buffer.prototype,'toString',function(encoding,...args){if(encoding==='base64')throw Error('Binary cache read must not encode base64');return toString.call(this,encoding,...args);});
   assert.ok(library.read(image).bytes.equals(png));
@@ -103,6 +103,47 @@ test('invalid/oversized images and unowned saved paths fail before decode; inter
   assert.equal((await library.capture({type:'imageGeneration',id:'path',status:'completed',result:'',savedPath:path.join(root,'outside.png')},{workspace:path.join(root,'workspace')}))[0].status,'failed');assert.equal(decodes,0);
   fs.symlinkSync(path.join(root,'outside.png'),path.join(root,'workspace/link.png'));assert.equal((await library.capture({type:'imageGeneration',id:'path',status:'completed',result:'',savedPath:path.join(root,'workspace/link.png')},{workspace:path.join(root,'workspace')}))[0].status,'failed');
   const store=new Store(path.join(root,'store'),{});store.data.messages=[{id:'a',role:'assistant',text:'',status:'queued',images:[{itemId:'unfinished',status:'pending'}]}];store.save();assert.equal(new Store(store.directory,{}).data.messages[0].images[0].status,'failed');
+});
+
+test('successful image metadata avoids duplicate decode while preview loss and validator changes revalidate',async t=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'onggi-image-validation-cache-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));let decodes=0;
+  const preview=Buffer.from(png);preview[preview.length-1]^=1;
+  const validator={validate:async(candidate,timeout,policy)=>{decodes++;assert.equal(timeout,10000);assert.deepEqual(policy,{maxDimension:4096,maxPixels:16777216,thumbnailSize:512});candidate.thumbnail='data:image/png;base64,'+preview.toString('base64');candidate.decodedImages=[{width:2,height:2}];}};
+  const library=new ResponseImages(root,validator),item={type:'imageGeneration',id:'cache',status:'completed',result:png.toString('base64')};
+  const [first]=await library.capture(item);assert.equal(first.status,'ready');assert.equal(decodes,1);assert.equal(library.validationCache.size,1);
+  assert.deepEqual((await library.capture({...item,id:'duplicate'}))[0],{...first,itemId:'duplicate'});assert.equal(decodes,1);
+  fs.unlinkSync(library.read({id:first.previewId,mime:'image/png'}).file);assert.equal((await library.capture(item))[0].status,'ready');assert.equal(decodes,2);
+  const prior=validator.validate;validator.validate=async(...args)=>prior(...args);assert.equal((await library.capture(item))[0].status,'ready');assert.equal(decodes,3);
+  library.validator={validate:validator.validate};assert.equal((await library.capture(item))[0].status,'ready');assert.equal(decodes,4);
+  fs.unlinkSync(library.read(first).file);assert.equal((await library.capture(item))[0].status,'ready');assert.equal(decodes,5);
+  for(const cached of library.validationCache.values())assert.deepEqual(Object.keys(cached).sort(),['height','mime','previewId','validate','validator','width']);
+});
+
+test('image validation cache never trusts modified source or preview files and never caches failures',async t=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'onggi-image-validation-integrity-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+  for(const target of ['source','preview']){
+    let decodes=0;const preview=Buffer.from(png);preview[preview.length-1]^=1;
+    const library=new ResponseImages(path.join(root,target),{validate:async candidate=>{decodes++;candidate.thumbnail='data:image/png;base64,'+preview.toString('base64');}}),item={type:'imageGeneration',id:target,status:'completed',result:png.toString('base64')},[image]=await library.capture(item);
+    const reference=target==='source'?image:{id:image.previewId,mime:'image/png'},file=library.read(reference).file,changed=Buffer.from(target==='source'?png:preview);changed[changed.length-1]^=2;fs.writeFileSync(file,changed);
+    assert.equal((await library.capture(item))[0].status,'failed');assert.equal(decodes,1);assert.equal(library.validationCache.size,0);assert.deepEqual(fs.readFileSync(file),changed);
+  }
+  let decodes=0;const library=new ResponseImages(path.join(root,'failure'),{validate:async candidate=>{if(++decodes===1)throw Error('decode failed');candidate.thumbnail=candidate.imageFiles[0].source;}}),item={type:'imageGeneration',id:'failure',status:'completed',result:png.toString('base64')};
+  assert.equal((await library.capture(item))[0].status,'failed');assert.equal(library.validationCache.size,0);assert.equal((await library.capture(item))[0].status,'ready');assert.equal(decodes,2);
+  const source=Buffer.from(png);source[source.length-1]^=4;const write=t.mock.method(fs.promises,'writeFile',async()=>{throw Error('disk full');});
+  assert.equal((await library.capture({...item,result:source.toString('base64')}))[0].status,'failed');assert.equal(library.validationCache.size,1);assert.equal(decodes,3);write.mock.restore();
+  assert.equal((await library.capture({...item,result:source.toString('base64')}))[0].status,'ready');assert.equal(decodes,4);
+});
+
+test('image validation metadata has a bounded LRU and keeps recently used entries',async t=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'onggi-image-validation-lru-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));let decodes=0;
+  const library=new ResponseImages(root,{validate:async candidate=>{decodes++;candidate.thumbnail=candidate.imageFiles[0].source;}}),inputs=[];
+  for(let index=0;index<129;index++){const bytes=Buffer.from(png);bytes.writeUInt16BE(index,bytes.length-2);inputs.push(bytes.toString('base64'));}
+  const item={type:'imageGeneration',id:'lru',status:'completed'};
+  for(const result of inputs.slice(0,128))assert.equal((await library.capture({...item,result}))[0].status,'ready');assert.equal(library.validationCache.size,128);assert.equal(decodes,128);
+  assert.equal((await library.capture({...item,result:inputs[0]}))[0].status,'ready');assert.equal(decodes,128);
+  assert.equal((await library.capture({...item,result:inputs[128]}))[0].status,'ready');assert.equal(library.validationCache.size,128);assert.equal(decodes,129);
+  assert.equal((await library.capture({...item,result:inputs[0]}))[0].status,'ready');assert.equal(decodes,129);
+  assert.equal((await library.capture({...item,result:inputs[1]}))[0].status,'ready');assert.equal(library.validationCache.size,128);assert.equal(decodes,130);
 });
 
 test('login timeout cancels its owned attempt without signing out the shared CLI cache',async t=>{
@@ -273,4 +314,24 @@ test('corrupt stored image/attachment/skill identifiers fail closed while origin
   assert.throws(()=>store.readHistory([store.data.activeConversationId]),/ID/);assert.throws(()=>images.read({id:[image.id],mime:image.mime}),/정보/);
   assert.throws(()=>attachments.read({...attachment,hash:[attachment.hash]}),/정보/);assert.throws(()=>attachments.read({...attachment,extension:[attachment.extension]}),/경로/);
   assert.ok(fs.readFileSync(source).equals(Buffer.from('note')));assert.ok(images.read(image).bytes.equals(png));
+});
+
+test('verified duplicate images skip quota directory scans without trusting changed cached content',async t=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'onggi-image-duplicate-scan-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));
+  const library=new ResponseImages(root,{validate:async candidate=>{candidate.thumbnail=candidate.imageFiles[0].source;}}),[image]=await library.capture({id:'warm',type:'imageGeneration',status:'completed',result:png.toString('base64')});assert.equal(image.status,'ready');
+  for(let i=0;i<256;i++)fs.writeFileSync(path.join(root,'padding-'+i),'x');
+  const readdir=fs.readdirSync;let scans=0;const mock=t.mock.method(fs,'readdirSync',(directory,...args)=>{if(directory===library.root)scans++;return readdir(directory,...args);});
+  try{const repeated=await library.capture({id:'duplicates',type:'mcpToolCall',status:'completed',result:{content:Array(8).fill({type:'image',data:png.toString('base64')})}});assert.ok(repeated.every(item=>item.status==='ready'));assert.equal(scans,0);fs.writeFileSync(path.join(library.root,image.id+'.png'),'changed');assert.equal((await library.capture({id:'changed',type:'imageGeneration',status:'completed',result:png.toString('base64')}))[0].status,'failed');assert.equal(scans,0);}finally{mock.mock.restore();}
+});
+
+test('new image quota scans yield and refuse roots or listings changed during a chunk',async t=>{
+  const {setImmediate}=require('node:timers');
+  for(const mode of ['stable','replace','link','add','remove']){
+    const root=fs.mkdtempSync(path.join(os.tmpdir(),'onggi-image-yield-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));const library=new ResponseImages(path.join(root,'images'),{validate:async candidate=>{candidate.thumbnail=candidate.imageFiles[0].source;}}),outside=path.join(root,'outside');fs.mkdirSync(outside);fs.writeFileSync(path.join(outside,'keep'),'preserve');
+    for(let i=0;i<256;i++)fs.writeFileSync(path.join(library.root,'padding-'+i),'x');let ticks=0,done=false;const tick=()=>{if(!done){ticks++;setImmediate(tick);}};setImmediate(tick);
+    if(mode!=='stable')setImmediate(()=>{if(mode==='replace'||mode==='link'){fs.renameSync(library.root,library.root+'-original');if(mode==='link')fs.symlinkSync(outside,library.root);else fs.mkdirSync(library.root);}else if(mode==='add')fs.writeFileSync(path.join(library.root,'added'),'external');else fs.unlinkSync(path.join(library.root,'padding-255'));});
+    let image;try{[image]=await library.capture({id:mode,type:'imageGeneration',status:'completed',result:png.toString('base64')});}finally{done=true;}
+    assert.ok(ticks>=1,mode);assert.equal(image.status,mode==='stable'?'ready':'failed',mode);if(mode==='stable')assert.ok(ticks>=2);else{const original=mode==='replace'||mode==='link'?library.root+'-original':library.root;assert.ok(fs.readdirSync(original).every(name=>!name.includes('.tmp-')&&!/^[a-f0-9]{64}\.png$/.test(name)),mode);}
+    assert.equal(fs.readFileSync(path.join(outside,'keep'),'utf8'),'preserve');assert.equal(library.saveWork,null);
+  }
 });

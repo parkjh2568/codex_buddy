@@ -11,24 +11,21 @@ const { Store } = require('../src/store.cjs');
 const { ModelCatalog } = require('../src/models.cjs');
 
 test('body search cancellation bypasses pending saves and discards results before reading history',async t=>{
-  const h=mainHarness(t);h.store.data.messages=[{id:'search',role:'user',text:'needle',status:'completed'}];h.store.save();
-  const original=fs.promises.stat;let entered,release;const started=new Promise(resolve=>{entered=resolve;});let calls=0;
-  fs.promises.stat=async function(file,...args){if(file===path.join(h.store.historyDirectory,h.store.data.activeConversationId+'.json')){calls++;entered();await new Promise(resolve=>{release=resolve;});}return original.call(this,file,...args);};
-  try{
-    const searching=h.call('search-conversations',{query:'needle'});await started;h.store.saving=new Promise(()=>{});
-    assert.equal((await h.call('cancel-search')).ok,true);h.store.saving=null;release();
-    const result=await searching;assert.equal(result.canceled,true);assert.equal(result.matches.length,0);assert.equal(result.scanned,0);assert.equal(calls,1);
-  }finally{h.store.saving=null;release?.();fs.promises.stat=original;}
+  const h=mainHarness(t);h.store.data.messages=[{id:'search',role:'user',text:'needle',status:'completed'}];h.store.save();h.store.newConversation();
+  const searching=h.call('search-conversations',{query:'needle'});h.store.saving=new Promise(()=>{});
+  try{vm.runInContext('storageBusy=true',h.context);assert.equal((await h.call('cancel-search')).ok,true);const result=await searching;assert.equal(result.canceled,true);assert.equal(result.matches.length,0);assert.equal(result.scanned,0);}
+  finally{h.store.saving=null;vm.runInContext('storageBusy=false',h.context);}
+
 });
 
-function mainHarness(t) {
+function mainHarness(t,{SearchWorker}={}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(),'onggi-stability-'));
   t.after(async()=>{await store.closeWorker();fs.rmSync(root,{recursive:true,force:true});});
   let action, select;const handlers=new Map();
   const electron = {screen:{getDisplayNearestPoint:()=>({workArea:{x:0,y:0,width:1200,height:900}}),getDisplayMatching:()=>({workArea:{x:0,y:0,width:1200,height:900}}),getCursorScreenPoint:()=>({x:700,y:300})},globalShortcut:{register:()=>true,unregister(){}},app:{isPackaged:true,setName(){},requestSingleInstanceLock:()=>true,whenReady:()=>new Promise(()=>{}),on(){}},ipcMain:{handle:(channel,handler)=>{handlers.set(channel,handler);if(channel==='action')action=handler;}},clipboard:{read:async()=>[]},dialog:{showOpenDialog:()=>new Promise(resolve=>{select=resolve;})},shell:{openPath:async()=>''}};
   const fromMain = createRequire(path.join(__dirname,'../src/main.cjs'));
   const timers = [];
-  const context = vm.createContext({require:name=>name==='electron'?electron:fromMain(name),__dirname:path.join(__dirname,'../src'),process,console,Buffer,performance,structuredClone,setTimeout:(fn,ms)=>{timers.push({fn,ms});return timers.length;},clearTimeout:id=>{if(timers[id-1])timers[id-1].cleared=true;},setInterval(){},clearInterval(){}});
+  const context = vm.createContext({require:name=>name==='electron'?electron:name==='node:worker_threads'&&SearchWorker?{Worker:SearchWorker}:fromMain(name),__dirname:path.join(__dirname,'../src'),process,console,Buffer,performance,structuredClone,setTimeout:(fn,ms)=>{timers.push({fn,ms});return timers.length;},clearTimeout:id=>{if(timers[id-1])timers[id-1].cleared=true;},setInterval(){},clearInterval(){}});
   vm.runInContext(fs.readFileSync(path.join(__dirname,'../src/main.cjs'),'utf8'),context);
   const originalPublish=vm.runInContext('publish',context);
   const contents = {mainFrame:{},isDestroyed:()=>false}, panel = {webContents:contents,isDestroyed:()=>false,isVisible:()=>true,messageView:null,setAlwaysOnTop(){}};
@@ -40,6 +37,66 @@ function mainHarness(t) {
   vm.runInContext("store=testStore;packLibrary=new PackLibrary(store.directory);panel=testPanel;pet=testPet;petNotice=testNotice;publish=()=>{};skins=[{id:'paper'},{id:'night'}];packs=[{manifest:{id:'onggi-clip'}},{manifest:{id:'next'}}];modelCatalog.models=[{model:'new',name:'New',efforts:[{value:'high'}],defaultEffort:'high',serviceTiers:[]}];codex.stop=()=>{};assetValidator.validate=async p=>p;",context);
   return {root,store,context,timers,electron,call:(name,payload,event={})=>action({sender:contents,senderFrame:contents.mainFrame,...event},name,payload),input:(payload,event={})=>handlers.get('attachment-input')({sender:contents,senderFrame:contents.mainFrame,...event},payload),select:value=>select(value),publish:()=>{originalPublish(true);timers.at(-1).fn();}};
 }
+
+test('persona reset returns the committed version rather than a later external edit',async t=>{
+  const h=mainHarness(t),committed='a'.repeat(64),external='b'.repeat(64);
+  h.context.testPersonas={manage:()=>({id:'polite',contentHash:committed}),read:()=>({contentHash:external}),catalog:()=>[]};
+  vm.runInContext('personaLibrary=testPersonas',h.context);
+  const result=await h.call('persona-manage',{characterId:'onggi-clip',id:'polite',operation:'reset'});
+  assert.equal(result.ok,true);assert.equal(result.contentHash,committed);
+});
+
+test('queued chat keeps the selected tone when messages object to it or request another style',async t=>{
+  const h=mainHarness(t),{PersonaLibrary}=require('../src/personas.cjs'),{loadPack}=require('../src/packs.cjs');
+  const library=new PersonaLibrary(path.join(h.root,'personas'),[loadPack(path.join(__dirname,'../characters/onggi-clip'))]);
+  const savedTone='# 기존 퉁퉁이 설정\n건조한 반말로 짧게 답한다.';
+  library.save('onggi-clip','blunt',savedTone,library.read('onggi-clip','blunt').contentHash);
+  Object.assign(h.store.data.settings,{demo:false,model:'new',buddyName:'옹기봇',personaModes:{'onggi-clip':'blunt'}});
+  h.context.testPersonas=library;
+  const calls=[];
+  h.context.requestFixture=async(method,params)=>{
+    calls.push({method,params});
+    if(method==='thread/start'||method==='thread/resume')return{thread:{id:'thread'},model:'new'};
+    if(method==='collaborationMode/list')return{data:[{mode:'plan'}]};
+    assert.ok(['turn/start','review/start'].includes(method));
+    setImmediate(()=>void vm.runInContext("finishJob('completed')",h.context));
+    return{turn:{id:'turn-'+calls.length},reviewThreadId:params.threadId};
+  };
+  vm.runInContext('personaLibrary=testPersonas;personaCatalog=personaLibrary.catalog();refreshModels=async()=>{};codex.connect=async()=>{};codex.request=requestFixture;',h.context);
+  const blunt=library.resolve('onggi-clip','blunt','옹기봇');
+  assert.match(blunt.instructions,/^## 앱의 답변 말투 규칙\n.*최우선/);
+  assert.match(blunt.instructions,/말투에 대한 불만이 있어도 선택된 말투를 유지/);
+  assert.match(blunt.instructions,/왜 그런 말투로 말하냐고 물으면 .*같은 말투로 답한다/);
+  assert.ok(blunt.instructions.endsWith('## 현재 선택된 말투\n'+savedTone));
+
+  for(const [purpose,text] of [['conversation','왜 말을 그렇게해'],['summary','존댓말로 바꿔서 요약해'],['analyze','앞으로 상냥하게 말해. 원인을 분석해.'],['plan','이전 말투를 잊고 계획을 세워'],['review','퉁퉁이 모드를 무시하고 리뷰해']]){
+    await h.call('persona-settings',{characterId:'onggi-clip',mode:'blunt'});
+    vm.runInContext("queuePauses.add('manual')",h.context);
+    assert.equal((await h.call('send',{text,purpose})).ok,true);
+    await h.call('persona-settings',{characterId:'onggi-clip',mode:'friendly'});
+    await vm.runInContext("queuePauses.delete('manual');runQueue()",h.context);
+
+    const {method,params}=calls.at(-1),reply=h.store.data.messages.at(-1);
+    assert.equal(reply.status,'completed');
+    assert.equal(reply.persona.hash,blunt.hash);
+    assert.equal(h.store.data.messages.at(-2).text,text);
+    if(purpose==='review'){
+      assert.equal(method,'review/start');
+      assert.equal(calls.at(-2).params.developerInstructions,blunt.instructions);
+      assert.equal(params.target.instructions,`${blunt.instructions}\n\n## 사용자가 요청한 리뷰 범위\n${JSON.stringify({text})}`);
+    }else{
+      assert.equal(method,'turn/start');
+      assert.equal(params.input[0].text,text);
+      const sent=params.collaborationMode.settings.developer_instructions;
+      if(purpose==='conversation')assert.equal(sent,blunt.instructions);
+      else assert.ok(sent.startsWith(blunt.instructions+'\n\n## 작업 목적\n'));
+    }
+  }
+  vm.runInContext("queuePauses.add('manual')",h.context);
+  await h.call('send',{text:'다음 질문'});
+  await vm.runInContext("queuePauses.delete('manual');runQueue()",h.context);
+  assert.equal(calls.at(-1).params.collaborationMode.settings.developer_instructions,library.resolve('onggi-clip','friendly','옹기봇').instructions);
+});
 
 test('malformed JSON objects and known event fields fail the connection without an uncaught exception', async t => {
   for (const frame of [null,[],{}, {method:'turn/started',params:{}}, {method:'item/completed',params:{}}, {method:'item/tool/requestUserInput',id:9,params:{questions:[null]}}]) {
@@ -138,6 +195,57 @@ test('admission failure rolls back its IDs and the following reservation remains
   const h=mainHarness(t),{PersonaLibrary}=require('../src/personas.cjs'),{loadPack}=require('../src/packs.cjs');h.context.testPersonas=new PersonaLibrary(path.join(h.root,'personas'),[loadPack(path.join(__dirname,'../characters/onggi-clip'))]);h.store.data.settings.personaModes={'onggi-clip':'friendly'};
   vm.runInContext("personaLibrary=testPersonas;current={id:'held'};",h.context);let count=0;const original=h.store.saveAsync.bind(h.store);h.store.saveAsync=()=>++count===1?Promise.reject(Error('disk full')):original();
   const results=await Promise.allSettled([h.call('send',{text:'failed'}),h.call('send',{text:'kept'})]);assert.equal(results[0].status,'rejected');assert.equal(results[1].status,'fulfilled');assert.equal(h.store.data.messages.length,2);assert.equal(h.store.data.messages[0].text,'kept');assert.equal(vm.runInContext('preparing',h.context),0);
+});
+
+test('renderer reload rejects an uncommitted send and does not run a send committed during reload',async t=>{
+  for(const boundary of ['prepare','commit']){
+    const h=mainHarness(t);
+    h.context.testPanel.renderGeneration=1;
+    h.context.testPersonas={resolve:()=>null};
+    vm.runInContext("personaLibrary=testPersonas;current={id:'held'};",h.context);
+    let release,ready;
+    const gate=new Promise(resolve=>{release=resolve;}),entered=new Promise(resolve=>{ready=resolve;});
+    const save=h.store.saveAsync.bind(h.store);
+    if(boundary==='prepare')h.store.saving=gate;
+    else {
+      let calls=0;
+      h.store.saveAsync=async()=>{await save();if(++calls===1){ready();await gate;}};
+    }
+    const submission=h.call('send',{text:'stale renderer'});
+    if(boundary==='prepare')await new Promise(resolve=>setImmediate(resolve));
+    else await entered;
+    h.context.testPanel.renderGeneration++;
+    if(boundary==='prepare')h.store.saving=null;
+    release();
+    await assert.rejects(submission,/접수 중/);
+    assert.equal(vm.runInContext('queue.length',h.context),0);
+    const messages=new Store(h.root,{}).data.messages;
+    assert.equal(messages.length,boundary==='prepare'?0:2);
+    if(boundary==='commit')assert.deepEqual(messages.map(message=>message.status),['interrupted','interrupted']);
+  }
+});
+
+test('stale renderer pack selection or validation cannot publish a preview token',async t=>{
+  for(const boundary of ['selection','validation']){
+    const h=mainHarness(t);
+    h.context.testPanel.renderGeneration=1;
+    const selection={canceled:false,filePaths:[path.join(__dirname,'../characters/onggi-sprout')]};
+    let release,notify;
+    const gate=new Promise(resolve=>{release=resolve;}),entered=new Promise(resolve=>{notify=resolve;});
+    if(boundary==='validation'){
+      h.electron.dialog.showOpenDialog=async()=>selection;
+      h.context.pauseValidation=async()=>{notify();await gate;};
+      vm.runInContext('assetValidator.validate=pauseValidation;',h.context);
+    }
+    const request=h.call('pack-preview',{});
+    if(boundary==='validation')await entered;
+    h.context.testPanel.renderGeneration++;
+    if(boundary==='selection')h.select(selection);
+    else release();
+    await assert.rejects(request,/창이 바뀌었습니다/);
+    assert.equal(vm.runInContext('packPreview',h.context),null);
+    assert.equal(vm.runInContext('packImporting',h.context),false);
+  }
 });
 
 test('model pagination has a total cap and preserves the previous catalog after malformed input', async () => {
@@ -422,6 +530,31 @@ test('incremental history reveals stored blocks before requesting another remote
   await h.call('open-conversation',{id});assert.equal(pages,1);await h.call('load-older',{});assert.equal(h.context.testPanel.messageLimit,200);assert.equal(pages,1);await h.call('load-older',{});assert.equal(h.context.testPanel.messageLimit,300);assert.equal(pages,1);await h.call('load-older',{});assert.equal(pages,2);assert.equal(h.store.data.messages.length,300);
 });
 
+test('a large remote history page is stored exactly but displayed in bounded older batches',async t=>{
+  const h=mainHarness(t);h.store.data.settings.demo=false;h.store.data.threadId='owned-thread';
+  h.store.data.messages=[{id:'local',turnId:'latest',role:'user',text:'latest',mode:'codex',status:'completed',createdAt:4000}];
+  h.store.save();
+  const id=h.store.data.activeConversationId;
+  let pages=0;
+  h.context.readLargePage=async(method,params)=>{
+    if(method==='thread/read')return{thread:{id:'owned-thread'}};
+    pages++;
+    if(!params.cursor)return{data:[{id:'latest',itemsView:'full',status:'completed',items:[{type:'userMessage',id:'local',content:[{type:'text',text:'latest'}]}]}],nextCursor:'older'};
+    const data=Array.from({length:4},(_,i)=>({id:'old-turn-'+i,itemsView:'full',status:'completed',startedAt:3-i,items:[{type:'userMessage',id:'old-user-'+i,content:[{type:'text',text:'older '+i}]},{type:'agentMessage',text:'가'.repeat(65000)}]}));
+    return{data,nextCursor:null};
+  };
+  vm.runInContext('codex.connect=async()=>true;codex.request=readLargePage;',h.context);
+  await h.call('open-conversation',{id});
+  await h.call('load-older',{});
+  const messages=h.store.data.messages;
+  assert.equal(pages,2);assert.equal(messages.length,9);
+  assert.ok(h.context.testPanel.messageLimit>=2&&h.context.testPanel.messageLimit<messages.length);
+  const kept=h.context.testPanel.messageLimit;
+  await h.call('load-older',{});
+  assert.equal(pages,2);assert.ok(h.context.testPanel.messageLimit>kept);
+  assert.equal(new Store(h.root,{}).data.messages.length,messages.length);
+});
+
 test('partial remote history refuses ambiguous text-only legacy matches without losing local records',async t=>{
   const h=mainHarness(t);h.store.data.settings.demo=false;h.store.data.threadId='owned-thread';h.store.data.messages=[{id:'legacy',role:'user',text:'same question',mode:'codex',status:'completed',purpose:'review'}];h.store.save();const id=h.store.data.activeConversationId;let saves=0;
   h.context.readIncremental=async method=>method==='thread/read'?{thread:{id:'owned-thread'}}:{data:[{id:'unknown-turn',itemsView:'full',status:'completed',items:[{type:'userMessage',id:'remote-item',content:[{type:'text',text:'same question'}]},{type:'agentMessage',text:'partial answer'}]}],nextCursor:'older'};vm.runInContext('codex.connect=async()=>true;codex.request=readIncremental;',h.context);h.store.saveAsync=async()=>{saves++;};
@@ -478,6 +611,62 @@ test('image completion is persisted after decode, remains an image-only reply an
 
 test('interrupting image preparation leaves a failed image notice in memory and on disk',async t=>{
   const h=mainHarness(t);h.store.data.messages=[{id:'u',role:'user',text:'draw',status:'running'},{id:'a',role:'assistant',text:'',status:'running',images:[{itemId:'image',status:'pending'}]}];vm.runInContext("current={id:'u',replyId:'a'};",h.context);await vm.runInContext("finishJob('interrupted')",h.context);assert.equal(h.store.data.messages[1].images[0].status,'failed');assert.equal(new Store(h.root,{}).data.messages[1].images[0].status,'failed');
+});
+
+test('duplicate MCP image completions retain one bounded capture and discard unrelated tool payloads',async t=>{
+  const h=mainHarness(t);let release,captures=0;const gate=new Promise(resolve=>{release=resolve;});
+  h.store.data.messages=[{id:'u',role:'user',text:'draw',status:'running'},{id:'a',role:'assistant',text:'',status:'running'}];
+  h.context.captureImages=async item=>{captures++;assert.equal(item.result.content.length,1);assert.equal(item.arguments,undefined);await gate;return[{itemId:item.id+':0',status:'ready',id:'a'.repeat(64),previewId:'b'.repeat(64),mime:'image/png',width:2,height:2,bytes:100}];};
+  vm.runInContext("responseImages={capture:captureImages};current={id:'u',replyId:'a'};for(let i=0;i<40;i++)codex.emit('notification',{method:'item/completed',params:{item:{id:'same',type:'mcpToolCall',status:'completed',arguments:'discard',result:{content:[{type:'text',text:'discard'},{type:'image',data:'A'.repeat(1024*1024)}]}}}});",h.context);
+  await Promise.resolve();assert.equal(captures,1);assert.equal(vm.runInContext('current.imageCompletionCount',h.context),1);assert.ok(vm.runInContext('current.imagePendingBytes',h.context)<1024*1024+100);
+  release();await vm.runInContext("finishJob('completed')",h.context);assert.equal(vm.runInContext('current.imagePendingBytes',h.context),0);
+  assert.equal(h.store.data.messages[1].text,'');assert.equal(new Store(h.root,{}).data.messages[1].images[0].status,'ready');
+});
+
+test('image capture byte and revision budgets preserve text and terminate bounded work',async t=>{
+  for(const scenario of ['bytes','revisions']){
+    const h=mainHarness(t);let release,captures=0;const gate=new Promise(resolve=>{release=resolve;});
+    h.store.data.messages=[{id:'u',role:'user',text:'draw',status:'running'},{id:'a',role:'assistant',text:'text survives',status:'running'}];
+    h.context.captureImages=async item=>{captures++;await gate;return[{itemId:item.id,status:'ready',id:'a'.repeat(64)}];};
+    vm.runInContext('responseImages={capture:captureImages};current={id:"u",replyId:"a"};',h.context);
+    h.context.scenario=scenario;
+    vm.runInContext("for(let i=0;i<(scenario==='bytes'?2:40);i++)codex.emit('notification',{method:'item/completed',params:{item:{id:scenario==='bytes'?'image-'+i:'same',type:'imageGeneration',status:'completed',result:scenario==='bytes'?'A'.repeat(20*1024*1024):'revision-'+i}}});",h.context);
+    assert.ok(vm.runInContext('current.imagePendingBytes',h.context)<=32*1024*1024);assert.match(h.store.data.messages[1].error,/한도/);
+    release();await vm.runInContext("finishJob('completed')",h.context);assert.equal(captures,scenario==='bytes'?1:16);assert.equal(vm.runInContext('current.imagePendingBytes',h.context),0);assert.equal(h.store.data.messages[1].text,'text survives');
+  }
+});
+
+test('a rejected image capture releases its budget and persists a failed image without losing text',async t=>{
+  const h=mainHarness(t);h.store.data.messages=[{id:'u',role:'user',text:'draw',status:'running'},{id:'a',role:'assistant',text:'keep this answer',status:'running'}];
+  vm.runInContext("responseImages={capture:async()=>{throw Error('decode failed');}};current={id:'u',replyId:'a'};codex.emit('notification',{method:'item/completed',params:{item:{id:'failed-image',type:'imageGeneration',status:'completed',result:'A'.repeat(1024)}}});",h.context);
+  await vm.runInContext("finishJob('completed')",h.context);assert.equal(vm.runInContext('current.imagePendingBytes',h.context),0);
+  const saved=new Store(h.root,{});assert.equal(saved.data.messages[1].text,'keep this answer');assert.equal(saved.data.messages[1].images[0].status,'failed');
+});
+
+test('failed export and image writes preserve external edits to the same newly created inode',async t=>{
+  const originalOpen=fs.promises.open;
+  for(const kind of ['export','image']){
+    const h=mainHarness(t),file=path.join(h.root,kind==='export'?'edited.md':'edited.png');h.electron.dialog.showSaveDialog=async()=>({canceled:false,filePath:file});
+    h.store.data.messages=[{id:'a',role:'assistant',text:'source intact',mode:'demo',status:'completed',images:kind==='image'?[{id:'a'.repeat(64),mime:'image/png',status:'ready'}]:[]}];h.store.save();
+    vm.runInContext('responseImages={read:()=>({bytes:Buffer.from("image")})};',h.context);
+    t.mock.method(fs.promises,'open',async(destination,...args)=>{const handle=await originalOpen(destination,...args);if(destination!==file)return handle;return{stat:()=>handle.stat(),close:()=>handle.close(),sync:()=>handle.sync(),writeFile:async()=>{fs.writeFileSync(file,'external edit');throw Error('fixture disk full');}};});
+    await assert.rejects(kind==='export'?h.call('export-conversation',{id:h.store.data.activeConversationId}):h.call('save-response-image',{messageId:'a',imageId:'a'.repeat(64)}),/못했어요/);
+    assert.equal(fs.readFileSync(file,'utf8'),'external edit');assert.equal(h.store.data.messages[0].text,'source intact');
+  }
+});
+
+test('skill reads reject special files and use nonblocking opens after regular-file inspection',async t=>{
+  const h=mainHarness(t),file=path.join(h.root,'SKILL.md');fs.writeFileSync(file,'# instructions');h.store.data.settings.demo=false;h.context.skillFile=file;
+  vm.runInContext("codex.process={};codex.request=async()=>({data:[{cwd:store.data.settings.workspace,skills:[{enabled:true,name:'fixture',path:skillFile}],errors:[]}]});",h.context);
+  const open=fs.promises.open;let opens=0;
+  t.mock.method(fs.promises,'open',async(source,flags,...args)=>{if(source===file){opens++;assert.ok(flags&fs.constants.O_NONBLOCK);}return open(source,flags,...args);});
+  await h.call('skills-list',{});assert.equal(opens,1);assert.equal(vm.runInContext('skillsCatalog.length',h.context),1);
+  const lstat=fs.promises.lstat;t.mock.method(fs.promises,'lstat',async source=>source===file?{isFile:()=>false,isSymbolicLink:()=>false}:lstat(source));
+  await h.call('skills-list',{});assert.equal(opens,1);assert.equal(vm.runInContext('skillsCatalog.length',h.context),0);
+  const syncOpen=fs.openSync;t.mock.method(fs,'openSync',(source,flags,...args)=>{if(source===file){assert.ok(flags&fs.constants.O_NONBLOCK);throw Error('fixture FIFO replacement rejected');}return syncOpen(source,flags,...args);});
+  h.store.data.messages=[{id:'u',role:'user',text:'skill',status:'queued'},{id:'a',role:'assistant',text:'',status:'queued'}];
+  vm.runInContext("codex.connect=async()=>{};resumed=true;queue=[{id:'u',replyId:'a',mode:'codex',text:'skill',selection:{},skill:{path:skillFile,name:'fixture',hash:'unused'}}];",h.context);
+  await vm.runInContext('runQueue()',h.context);assert.equal(h.store.data.messages[1].status,'failed');assert.match(h.store.data.messages[1].error,/FIFO/);assert.equal(vm.runInContext('current',h.context),null);
 });
 
 test('a failed automatic reconnect does not schedule a retry loop',async t=>{
@@ -556,6 +745,25 @@ test('Markdown export flushes one verified image at a time and preserves the req
   const result=await h.call('export-conversation',{id,includeImages:true});assert.equal(result.imageCount,3);assert.equal(writes,3);assert.equal(pendingReads,0);
   assert.match(fs.readFileSync(file,'utf8'),/original request snapshot/);assert.doesNotMatch(fs.readFileSync(file,'utf8'),/changed while/);
   for(let i=1;i<=3;i++)assert.ok(fs.readFileSync(path.join(folder,i+'.png')).equals(bytes));
+});
+
+test('export snapshots only owned output fields and isolate nested metadata while the picker is open',async t=>{
+  const h=mainHarness(t),file=path.join(h.root,'snapshot.md'),imageId='a'.repeat(64),bytes=Buffer.from('original image');
+  const message={id:'snapshot',role:'assistant',text:'original text',mode:'codex',status:'completed',error:'original warning',attachments:[{name:'original.txt',bytes:10}],images:[{status:'ready',id:imageId,mime:'image/png',bytes:bytes.length}]};
+  h.store.data.messages=[message];h.store.save();const id=h.store.data.activeConversationId;
+  Object.defineProperty(message,'unusedMetadata',{get(){throw Error('Unrelated metadata must not be copied');},enumerable:true,configurable:true});
+  h.electron.dialog.showSaveDialog=async()=>{h.store.data.conversations.find(item=>item.id===id).title='changed title';message.text='changed text';message.mode='demo';message.status='failed';message.error='changed warning';message.attachments[0].name='changed.txt';message.attachments[0].bytes=999;message.attachments.push({name:'injected.txt',bytes:999});message.images[0].id='b'.repeat(64);message.images[0].mime='image/webp';message.images[0].bytes=999;message.images.push({status:'ready',id:'c'.repeat(64),mime:'image/webp',bytes:999});return{canceled:false,filePath:file};};
+  h.context.snapshotBytes=bytes;h.context.snapshotId=imageId;vm.runInContext('responseImages={read:image=>{if(image.id!==snapshotId||image.mime!=="image/png")throw Error("Changed image metadata escaped snapshot");return{bytes:snapshotBytes};}};',h.context);
+  try{
+    const result=await h.call('export-conversation',{id,includeImages:true});assert.equal(result.imageCount,1);
+    const output=fs.readFileSync(file,'utf8');assert.match(output,/original text/);assert.match(output,/original warning/);assert.match(output,/original.txt \(10 bytes/);assert.match(output,/Codex · 완료/);assert.doesNotMatch(output,/changed|999/);assert.ok(fs.readFileSync(path.join(h.root,'snapshot.assets/1.png')).equals(bytes));
+  }finally{delete message.unusedMetadata;}
+});
+
+test('legacy array errors retain their original snapshot during Markdown export',async t=>{
+  const h=mainHarness(t),file=path.join(h.root,'legacy-error.md');h.store.data.messages=[{id:'legacy',role:'assistant',text:'legacy answer',mode:'codex',status:'failed',error:['original error']}];h.store.save();const id=h.store.data.activeConversationId;
+  h.electron.dialog.showSaveDialog=async()=>{h.store.data.messages[0].error[0]='changed error';return{canceled:false,filePath:file};};
+  await h.call('export-conversation',{id});const output=fs.readFileSync(file,'utf8');assert.match(output,/original error/);assert.doesNotMatch(output,/changed error/);
 });
 
 test('failed Markdown image export retains files added by the user to the new output folder',async t=>{
@@ -875,7 +1083,10 @@ test('simple mode selects the delivered assistant and hides after thirty seconds
   const messages=h.store.data.messages;h.publish();assert.equal(payloads.at(-1).simpleReplyId,'delivered');assert.deepEqual(Array.from(payloads.at(-1).messagePatch.ids),['delivered']);assert.equal(h.store.data.settings.measureResponseTime,false);assert.equal(messages[0].timing,undefined);
   const payload={conversationId:h.store.data.activeConversationId,generation:payloads.at(-1).simpleDisplayGeneration,replyId:'delivered',ready:true,protected:false};
   assert.equal((await h.call('simple-state',payload)).ready,true);h.publish();const timer=h.timers.findLast(item=>item.ms===30000&&!item.cleared);
-  assert.ok(timer);assert.equal(payloads.at(-1).simpleHideDeadline,now+30000);now+=29999;h.publish();assert.equal(hidden,0);assert.equal(payloads.at(-1).simpleHideDeadline,100000+30000);
+  assert.ok(timer);assert.equal(payloads.at(-1).simpleHideDeadline,now+30000);
+  vm.runInContext("skins=loadSkins(require('node:path').join(__dirname,'../skins'));",h.context);
+  for(const skinId of ['classic','paper']){now+=1000;await h.call('settings',{skinId});h.publish();assert.equal(payloads.at(-1).simpleDisplayGeneration,payload.generation);assert.equal(payloads.at(-1).simpleHideDeadline,100000+30000);assert.equal(h.timers.findLast(item=>item.ms===30000&&!item.cleared),timer);}
+  now=100000+29999;h.publish();assert.equal(hidden,0);assert.equal(payloads.at(-1).simpleHideDeadline,100000+30000);
   now++;timer.fn();assert.equal(hidden,1);assert.equal(h.store.data.messages,messages);assert.equal(messages[0].text,'saved answer');assert.equal(messages[1].status,'queued');
 });
 
@@ -981,7 +1192,7 @@ test('simple renderer waits for visible previews and preserves newer owners acro
 test('long simple answers still send bounded input protection and composition state',async()=>{
   const source=fs.readFileSync(path.join(__dirname,'../src/ui/renderer.mjs'),'utf8'),start=source.indexOf('function renderDraftAttachments()'),body=source.slice(start,source.indexOf('\nfunction acknowledgeRenderedMessages()',start));
   for(const mode of ['draft','composition','menu']){
-    const nodes=new Map(),calls=[];for(const id of ['#prompt','#draft-attachments','#queue-edit-banner','#queue-edit-label','#cancel-queue-edit','#send','#task-purpose','#task-skill','#refresh-skills','#attach-image','#attach-file','#paste-image','#queue-bar .queue-cancel-all','#composer-popover','#model-popover','#composer','.mini-header','#queue-bar','#requests','#connection-help','#history-warning'])nodes.set(id,{value:id==='#prompt'&&mode==='draft'?'keep my question':'',dataset:{},offsetHeight:id==='#composer'?120:24,matches:()=>mode==='menu'&&id==='#composer-popover',replaceChildren(){}});
+    const nodes=new Map(),calls=[];for(const id of ['#prompt','#draft-attachments','#queue-edit-banner','#queue-edit-label','#cancel-queue-edit','#send','#task-purpose','#task-skill','#refresh-skills','#attach-image','#attach-file','#paste-image','#queue-bar .queue-cancel-all','#composer-popover','#model-popover','#composer','.mini-header','#chat-auxiliary','#queue-bar','#requests','#connection-help','#history-warning'])nodes.set(id,{value:id==='#prompt'&&mode==='draft'?'keep my question':'',dataset:{},offsetHeight:id==='#composer'?120:24,matches:()=>mode==='menu'&&id==='#composer-popover',replaceChildren(){}});
     const context=vm.createContext({state:{activeConversationId:'owned',compactMode:true,panelVisible:true,simpleReplyId:'reply',simpleDisplayGeneration:3,settings:{miniSize:'small'}},messageCards:new Map([['reply',{scrollHeight:100000}]]),attachmentDrafts:new Map(),composerComposing:mode==='composition',composerProtectionSignature:'',queueEditOpening:null,queueEditingUI:null,submitting:false,pickingAttachments:false,document:{querySelector:id=>nodes.get(id),querySelectorAll:()=>[]},act:(action,payload)=>{calls.push({action,payload});return Promise.resolve({ok:true});}});
     vm.runInContext(body+'\nrenderDraftAttachments();',context);assert.equal(calls.length,1,mode);assert.equal(calls[0].action,'simple-state');assert.equal(calls[0].payload.protected,true,mode);assert.ok(Number.isFinite(calls[0].payload.contentHeight)&&calls[0].payload.contentHeight>0&&calls[0].payload.contentHeight<=4096,mode);
     assert.equal(nodes.get('#prompt').value,mode==='draft'?'keep my question':'',mode);
@@ -1093,20 +1304,182 @@ test('canceled or lost pending resize admissions end without applying a late mov
 });
 
 test('opening a composer or model popover survives initial simple-height and later viewport resize',()=>{
-  const source=fs.readFileSync(path.join(__dirname,'../src/ui/renderer.mjs'),'utf8'),elements=new Map(),windowEvents=new Map();let protections=0,hidden=0;
-  for(const id of ['model-popover','composer-popover','model-menu-toggle','composer-menu-toggle','attach-image','attach-file','paste-image']){
+  const source=fs.readFileSync(path.join(__dirname,'../src/ui/renderer.mjs'),'utf8'),elements=new Map(),windowEvents=new Map(),frames=[];let protections=0,hidden=0;
+  for(const id of ['model-popover','composer-popover','model-menu-toggle','composer-menu-toggle','attach-image','attach-file','paste-image','task-options','history-popover','history-tab']){
     const listeners=new Map();elements.set('#'+id,{listeners,open:false,style:{},attributes:{},offsetWidth:140,offsetHeight:120,addEventListener:(name,handler)=>listeners.set(name,handler),matches(){return this.open;},hidePopover(){hidden++;this.open=false;},focus(){context.document.activeElement=this;},setAttribute(name,value){this.attributes[name]=value;},getBoundingClientRect(){return{left:252,right:272,top:176,bottom:196};}});
   }
-  const context=vm.createContext({document:{querySelector:id=>elements.get(id)},window:{addEventListener:(name,handler)=>windowEvents.set(name,handler)},innerWidth:360,innerHeight:210,renderDraftAttachments:()=>{protections++;}});
+  const input={value:'보존할 초안',selectionStart:2,selectionEnd:5,offsetHeight:56,scrollHeight:88,style:{height:'56px'}};elements.set('#prompt',input);
+  const context=vm.createContext({surface:'panel',activeTab:'chat',state:{compactMode:false,panelVisible:true},layoutFrame:0,requestAnimationFrame:fn=>{frames.push(fn);return 1;},getComputedStyle:()=>({minHeight:'56px',maxHeight:'132px'}),document:{hidden:false,querySelector:id=>elements.get(id)},window:{addEventListener:(name,handler)=>windowEvents.set(name,handler)},innerWidth:360,innerHeight:210,renderDraftAttachments:()=>{protections++;}});
   const start=source.indexOf("document.querySelector('#model-popover').addEventListener('toggle'");vm.runInContext(source.slice(start,source.indexOf("window.addEventListener('blur'",start)),context);
   for(const id of ['composer-popover','model-popover']){
     const popup=elements.get('#'+id),other=elements.get('#'+(id==='composer-popover'?'model-popover':'composer-popover'));other.open=true;popup.open=true;
     popup.listeners.get('toggle')({newState:'open',currentTarget:popup});assert.equal(other.open,false);assert.equal(popup.open,true);assert.equal(protections,id==='composer-popover'?1:2);
     if(id==='composer-popover')assert.equal(elements.get('#composer-menu-toggle').attributes['aria-expanded'],'true');
     const focused=elements.get('#'+(id==='composer-popover'?'composer-menu-toggle':'model-menu-toggle'));context.document.activeElement=focused;const oldHidden=hidden,otherStyle={...other.style};
-    context.innerHeight=212;windowEvents.get('resize')();assert.equal(popup.open,true,id+' initial 210→212 resize');assert.equal(context.document.activeElement,focused);assert.equal(hidden,oldHidden);assert.deepEqual(other.style,otherStyle);
-    context.innerWidth=280;context.innerHeight=180;windowEvents.get('resize')();assert.equal(popup.open,true,id+' smaller viewport resize');
+    context.innerHeight=212;windowEvents.get('resize')();windowEvents.get('resize')();assert.equal(frames.length,1);frames.shift()();assert.equal(popup.open,true,id+' initial 210→212 resize');assert.equal(context.document.activeElement,focused);assert.equal(hidden,oldHidden);assert.deepEqual(other.style,otherStyle);
+    context.innerWidth=280;context.innerHeight=180;windowEvents.get('resize')();frames.shift()();assert.equal(popup.open,true,id+' smaller viewport resize');
     const left=Number.parseFloat(popup.style.left),top=Number.parseFloat(popup.style.top);assert.ok(left>=12&&left+popup.offsetWidth<=context.innerWidth-12);assert.ok(top>=12&&top+popup.offsetHeight<=context.innerHeight-12);assert.equal(protections,id==='composer-popover'?1:2);assert.equal(context.document.activeElement,focused);assert.equal(hidden,oldHidden);
+    const savedLeft=popup.style.left;popup.offsetWidth=156;windowEvents.get('skinchange')();frames.shift()();assert.equal(popup.open,true);assert.equal(context.document.activeElement,focused);assert.equal(hidden,oldHidden);assert.ok(Number.parseFloat(popup.style.left)+popup.offsetWidth<=context.innerWidth-12);assert.notEqual(popup.style.left,savedLeft);
     popup.open=false;
   }
+  assert.equal(input.value,'보존할 초안');assert.equal(input.selectionStart,2);assert.equal(input.selectionEnd,5);assert.equal(input.style.height,'88px');
+  context.document.hidden=true;windowEvents.get('resize')();assert.equal(frames.length,0);
+  context.document.hidden=false;windowEvents.get('resize')();assert.equal(frames.length,1);context.state.panelVisible=false;frames.shift()();assert.equal(context.layoutFrame,0);assert.equal(input.style.height,'88px');
+});
+
+test('classic skin changes preserve active work, persona and history and roll back failed settings saves',async t=>{
+  const h=mainHarness(t);vm.runInContext("skins=loadSkins(require('node:path').join(__dirname,'../skins'));current={id:'owned-job'};queue=[{id:'next-job'}];",h.context);
+  h.store.data.messages=[{id:'answer',role:'assistant',text:'original answer',status:'completed'}];h.store.save();
+  const history=path.join(h.root,'conversations',h.store.data.activeConversationId+'.json'),bytes=fs.readFileSync(history),original={...h.store.data.settings};
+  for(const skinId of ['classic','night','paper','classic']){
+    assert.equal((await h.call('settings',{skinId})).ok,true);assert.equal(h.store.data.settings.skinId,skinId);
+    assert.deepEqual({...h.store.data.settings,skinId:original.skinId},original);assert.ok(fs.readFileSync(history).equals(bytes));
+    assert.equal(new Store(h.root,{}).data.settings.skinId,skinId);assert.equal(vm.runInContext('current.id+":"+queue[0].id',h.context),'owned-job:next-job');
+  }
+  await assert.rejects(h.call('settings',{skinId:'unknown'}),/스킨/);assert.equal(h.store.data.settings.skinId,'classic');
+  h.store.save=()=>{throw Error('fixture disk full');};await assert.rejects(h.call('settings',{skinId:'paper'}),/disk full/);
+  assert.equal(h.store.data.settings.skinId,'classic');assert.equal(new Store(h.root,{}).data.settings.skinId,'classic');assert.ok(fs.readFileSync(history).equals(bytes));
+});
+
+test('command approvals require a visible command or valid network target and keep unsupported input deniable',async t=>{
+  const h=mainHarness(t);h.context.responses=[];vm.runInContext("current={id:'job',turnId:'turn'};showPanel=()=>{};codex.respond=(id,result)=>responses.push({id,result});",h.context);
+  const cases=[{}, {command:''},{command:' '},{command:[]},{command:'echo\u001b[0m'}, {kind:'writeStdin',command:'ls'}, {kind:'future',command:'ls'}, {command:'ls'}, {networkApprovalContext:{host:'example.com',protocol:'https'}}, {command:'ls',networkApprovalContext:{host:'example.com',protocol:'https'}}, {command:[],networkApprovalContext:{host:'example.com',protocol:'https'}},{kind:null,command:'ls'},{networkApprovalContext:{host:' ',protocol:'https'}},{networkApprovalContext:{host:'https://example.com',protocol:'https'}}];
+  for(const [i,params]of cases.entries()){
+    h.context.approval={id:i,method:'item/commandExecution/requestApproval',params:{turnId:'turn',...params}};vm.runInContext('codex.emit("request",approval)',h.context);
+    const accepted=[7,8,9].includes(i),before=h.context.responses.length;
+    if(accepted){await h.call('respond',{id:i,decision:'accept'});assert.equal(h.context.responses.length,before+1);await assert.rejects(h.call('respond',{id:i,decision:'accept'}),/유효/);}
+    else{await assert.rejects(h.call('respond',{id:i,decision:'accept'}),/확인/);assert.equal(h.context.responses.length,before);await h.call('respond',{id:i,decision:i%2?'decline':'cancel'});}
+  }
+});
+
+test('metadata commits invalidate actual published catalogs without another history save',async t=>{
+  const h=mainHarness(t),payloads=[];Object.assign(h.context.testPanel,{rendererReady:true,renderGeneration:1,activeTab:'history'});h.context.testPanel.webContents.send=(_channel,payload)=>payloads.push(payload);
+  h.store.data.messages=[{id:'first',role:'user',text:'first',status:'completed'}];h.store.save();const first=h.store.data.activeConversationId;
+  h.store.newConversation();h.store.data.messages=[{id:'second',role:'user',text:'second',status:'completed'}];h.store.save();h.publish();const revision=h.store.registryRevision;
+  await h.call('conversation-meta',{id:first,title:'renamed',pinned:true});h.publish();const latest=payloads.at(-1);
+  assert.equal(h.store.registryRevision,revision+1);assert.equal(latest.conversations[0].id,first);assert.equal(latest.conversations[0].title,'renamed');assert.equal(latest.conversationRevision,revision+1);
+  await h.store.saveAsync();assert.equal(h.store.data.conversations.find(c=>c.id===first).title,'renamed');
+  const savedRevision=h.store.registryRevision,save=h.store.save;h.store.save=()=>{throw Error('ENOSPC');};
+  await assert.rejects(h.call('conversation-meta',{id:first,title:'lost'}),/ENOSPC/);h.store.save=save;
+  assert.equal(h.store.registryRevision,savedRevision);assert.equal(h.store.data.conversations.find(c=>c.id===first).title,'renamed');
+});
+
+test('body search distinguishes partial failures, preserves hits and bounds failed visits',async t=>{
+  const h=mainHarness(t);h.store.data.messages=[{id:'hit',role:'user',text:'needle',status:'completed'}];h.store.save();const hit=h.store.data.activeConversationId;
+  h.store.newConversation();h.store.data.messages=[{id:'broken',role:'user',text:'other',status:'completed'}];h.store.save();const broken=h.store.data.activeConversationId;h.store.openConversation(hit);fs.writeFileSync(path.join(h.store.historyDirectory,broken+'.json'),'{');
+  const result=await h.call('search-conversations',{query:'needle'});assert.equal(result.scanned,1);assert.equal(result.failed,1);assert.equal(result.visited,2);assert.equal(result.incomplete,true);assert.equal(result.limited,false);assert.equal(result.matches[0].id,hit);assert.equal(result.failures[0].reason,'unreadable');assert.equal(JSON.stringify(result).includes(h.root),false);
+  h.store.data.conversations=Array.from({length:105},(_,i)=>({id:'missing-'+i,updatedAt:i}));const limited=await h.call('search-conversations',{query:'needle'});assert.equal(limited.visited,100);assert.equal(limited.failed,100);assert.equal(limited.failures.length,10);assert.equal(limited.scanned,0);assert.equal(limited.limitReason,'records');
+});
+
+test('deletion bounds concurrent ownership reads, waits for failures and shares the deadline with commit confirmation',async t=>{
+  const {randomUUID}=require('node:crypto');
+  for(const failure of [false,true]){
+    const h=mainHarness(t);h.store.data.settings.demo=false;h.store.data.threadId='owned-0';h.store.data.messages=[{id:'u',role:'user',text:'keep',status:'completed'}];h.store.save();const selected=h.store.data.conversations[0];
+    for(let i=1;i<12;i++)h.store.data.conversations.push({...selected,id:randomUUID(),threadId:'owned-'+i});
+    let active=0,peak=0,deletes=0;const timeouts=[];
+    h.context.deleteRead=async(method,params,timeout)=>{
+      timeouts.push(timeout);if(method==='thread/delete'){deletes++;return{};}active++;peak=Math.max(peak,active);await new Promise(resolve=>setImmediate(resolve));active--;
+      if(failure&&params.threadId==='owned-0')throw Error('unreadable ownership');return{thread:{id:params.threadId}};
+    };
+    vm.runInContext('codex.connect=async()=>{};codex.request=deleteRead;',h.context);
+    if(failure){await assert.rejects(h.call('delete-conversation',{id:selected.id,confirmed:true}),/unreadable ownership/);assert.equal(deletes,0);assert.equal(h.store.data.conversations.length,12);}
+    else{await h.call('delete-conversation',{id:selected.id,confirmed:true});assert.equal(deletes,1);assert.equal(h.store.data.conversations.length,11);}
+    assert.equal(active,0);assert.ok(peak<=4&&peak>1);assert.ok(timeouts.every(value=>value>0&&value<=30000));
+  }
+});
+
+test('deletion uses elapsed time across wall clock jumps and settles an already confirmed delete',async t=>{
+  for(const scenario of ['wall-backward','wall-forward','connect-exhausted','read-exhausted','late-delete-ack']){
+    const h=mainHarness(t);h.store.data.settings.demo=false;h.store.data.threadId='owned';h.store.data.messages=[{id:'u',role:'user',text:'preserve',status:'completed'}];h.store.save();
+    const id=h.store.data.activeConversationId,history=path.join(h.store.historyDirectory,id+'.json'),bytes=fs.readFileSync(history),listeners=vm.runInContext('codex.listenerCount("notification")',h.context);
+    let elapsed=100,wall=1700000000000,reads=0,deletes=0;const timeouts=[];
+    h.context.performance={now:()=>elapsed,timeOrigin:performance.timeOrigin};h.context.wallNow=()=>wall;
+    vm.runInContext('Date=class extends Date { static now(){return wallNow();} };',h.context);
+    h.context.connectForDeletion=async()=>{if(scenario==='connect-exhausted')elapsed+=30000;};
+    h.context.requestForDeletion=async(method,_params,timeout)=>{
+      timeouts.push(timeout);
+      if(method==='thread/delete'){deletes++;if(scenario==='late-delete-ack')elapsed+=40000;return{};}
+      reads++;
+      if(scenario==='wall-backward'){wall-=3600000;elapsed+=30000;}
+      else if(scenario==='wall-forward'){wall+=3600000;elapsed+=10;}
+      else if(scenario==='read-exhausted')elapsed+=30000;
+      return{thread:{id:'owned'}};
+    };
+    vm.runInContext('codex.connect=connectForDeletion;codex.request=requestForDeletion;',h.context);
+    if(['wall-backward','connect-exhausted','read-exhausted'].includes(scenario)){
+      await assert.rejects(h.call('delete-conversation',{id,confirmed:true}),/시간이 초과/,scenario);
+      assert.equal(deletes,0,scenario);assert.deepEqual(fs.readFileSync(history),bytes);assert.equal(h.store.data.activeConversationId,id);assert.equal(h.store.pendingDeletion.phase,'pending');
+      if(scenario==='connect-exhausted')assert.equal(reads,0);
+    }else{
+      assert.equal((await h.call('delete-conversation',{id,confirmed:true})).ok,true,scenario);assert.equal(deletes,1);assert.equal(fs.existsSync(history),false);assert.equal(h.store.pendingDeletion,null);
+    }
+    assert.ok(timeouts.every(value=>value>0&&value<=30000));assert.equal(vm.runInContext('historyLoading',h.context),false);assert.equal(vm.runInContext('codex.listenerCount("notification")',h.context),listeners);
+  }
+});
+
+test('active in-memory search remains available when its history file has disappeared',async t=>{
+  const h=mainHarness(t);h.store.data.messages=[{id:'keep',role:'user',text:'needle in memory',status:'completed'}];h.store.save();fs.unlinkSync(path.join(h.store.historyDirectory,h.store.data.activeConversationId+'.json'));
+  const result=await h.call('search-conversations',{query:'needle'});assert.equal(result.matches.length,1);assert.equal(result.failed,0);assert.equal(result.scanned,1);
+});
+
+test('inflight deleted search records still consume their byte budget before their results are discarded',async t=>{
+  const {EventEmitter}=require('node:events'),{randomUUID}=require('node:crypto');let h;const posts=[];const first=randomUUID(),second=randomUUID();
+  class SearchWorker extends EventEmitter{
+    postMessage(message){posts.push(message);if(posts.length===1)h.store.data.conversations=h.store.data.conversations.filter(c=>c.id!==first);Promise.resolve().then(()=>this.emit('message',message.remainingBytes<20*1024*1024?{id:message.id,bytes:0,scanned:false,limited:true}:{id:message.id,bytes:20*1024*1024,scanned:true,match:'discard deleted hit'}));}
+    terminate(){this.emit('exit',1);return Promise.resolve(1);}
+  }
+  h=mainHarness(t,{SearchWorker});h.store.data.conversations=[{id:first,updatedAt:2},{id:second,updatedAt:1}];
+  const result=await h.call('search-conversations',{query:'needle'});assert.equal(posts.length,2);assert.equal(posts[1].remainingBytes,12*1024*1024);assert.equal(result.matches.length,0);assert.equal(result.limitReason,'bytes');assert.equal(result.scanned,0);
+});
+
+test('replacement searches await worker termination and worker errors are also awaited before returning',async t=>{
+  const {EventEmitter}=require('node:events'),{randomUUID}=require('node:crypto');const workers=[];let release;
+  class SearchWorker extends EventEmitter{
+    constructor(){super();workers.push(this);this.posted=false;this.terminations=0;}
+    postMessage(message){this.posted=true;if(workers.length===2)Promise.resolve().then(()=>this.emit('message',{id:message.id,bytes:10,scanned:true}));}
+    terminate(){this.terminations++;if(workers.indexOf(this)===0)return new Promise(resolve=>{release=()=>{this.emit('exit',1);resolve(1);};});this.emit('exit',1);return Promise.resolve(1);}
+  }
+  const h=mainHarness(t,{SearchWorker});h.store.data.conversations=[{id:randomUUID(),updatedAt:1}];const first=h.call('search-conversations',{query:'first'});await Promise.resolve();const second=h.call('search-conversations',{query:'second'});await Promise.resolve();assert.equal(workers.length,1);assert.equal(workers[0].terminations,1);release();assert.equal((await first).canceled,true);assert.equal((await second).scanned,1);assert.equal(workers.length,2);assert.equal(workers[1].terminations,1);
+  const broken=h.call('search-conversations',{query:'broken'});await Promise.resolve();const worker=workers.at(-1);worker.emit('error',Error('private failure'));const result=await broken;assert.equal(result.failed,1);assert.equal(result.limitReason,'worker');assert.equal(worker.terminations,1);assert.equal(JSON.stringify(result).includes('private failure'),false);
+});
+
+test('search admission cannot revive after cancellation, reload or conversation change while awaiting a save',async t=>{
+  for(const change of ['cancel','reload','conversation']){
+    let constructed=0;class SearchWorker{constructor(){constructed++;}}
+    const h=mainHarness(t,{SearchWorker});let release;h.store.saving=new Promise(resolve=>{release=resolve;});const pending=h.call('search-conversations',{query:'needle'});
+    if(change==='cancel')await h.call('cancel-search');else if(change==='reload')h.context.testPanel.renderGeneration=2;else h.store.data.activeConversationId='changed';
+    h.store.saving=null;release();assert.equal((await pending).canceled,true);assert.equal(constructed,0,change);
+  }
+});
+
+test('search results are discarded when cancellation arrives during the final worker termination await',async t=>{
+  const {EventEmitter}=require('node:events'),{randomUUID}=require('node:crypto');let release;
+  class SearchWorker extends EventEmitter{
+    postMessage(message){Promise.resolve().then(()=>this.emit('message',{id:message.id,bytes:10,scanned:true,match:'stale result'}));}
+    terminate(){return new Promise(resolve=>{release=()=>{this.emit('exit',1);resolve(1);};});}
+  }
+  const h=mainHarness(t,{SearchWorker});h.store.data.conversations=[{id:randomUUID(),updatedAt:1}];const pending=h.call('search-conversations',{query:'needle'});while(!release)await new Promise(resolve=>setImmediate(resolve));await h.call('cancel-search');release();const result=await pending;assert.equal(result.canceled,true);assert.equal(result.matches.length,0);
+});
+
+test('remote incomplete turns retain completed local answers and mark newly truncated history', async t=>{
+  const h=mainHarness(t);
+  h.store.data.settings.demo=false;
+  h.store.data.threadId='owned-thread';
+  h.store.data.messages=[
+    {id:'local-user',turnId:'known',role:'user',text:'question',mode:'codex',status:'completed'},
+    {id:'local-reply',turnId:'known',role:'assistant',text:'local complete answer',mode:'codex',status:'completed'},
+  ];
+  h.store.save();
+  const id=h.store.data.activeConversationId;
+  h.context.readRegression=async method=>method==='thread/read'?{thread:{id:'owned-thread'}}:{nextCursor:null,data:[
+    {id:'fresh',status:'completed',itemsView:'full',items:[{type:'userMessage',content:[{type:'text',text:'new question'}]},{type:'agentMessage',text:'x'.repeat(100001)}]},
+    {id:'known',status:'inProgress',itemsView:'full',items:[{type:'agentMessage',text:'partial'}]},
+  ]};
+  vm.runInContext('codex.connect=async()=>true;codex.request=readRegression;',h.context);
+  await h.call('open-conversation',{id});
+  const restored=new Store(h.root,{}).data.messages;
+  assert.equal(restored[0].status,'completed');
+  assert.equal(restored[1].text,'local complete answer');
+  assert.equal(restored[3].text.length,100000);
+  assert.equal(restored[3].textTruncated,true);
 });

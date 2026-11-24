@@ -1,10 +1,15 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { Store } = require('../src/store.cjs');
-module.exports = async ({app,panel,store,codex}) => {
+module.exports = async ({app,panel,store,codex,publish}) => {
   try {
     const artifactRoot=path.resolve(process.env.ONGGI_SMOKE_ROOT??path.join(__dirname,'..','artifacts'));fs.mkdirSync(artifactRoot,{recursive:true});
+    panel.show();panel.focus();
     await panel.webContents.executeJavaScript(`(async()=>{
+      window.__historySmokeState=null;window.onggi.onState(next=>{window.__historySmokeState=next;});
+      await window.onggi.action('show-panel',{tab:'chat',full:true});
+      const deadline=Date.now()+5000;
+      while(document.hidden||!window.__historySmokeState?.panelVisible){if(Date.now()>deadline)throw Error('History window is not visible');await new Promise(r=>setTimeout(r,25));}
       await window.onggi.action('refresh-models');
       await window.onggi.action('send',{text:'첫 번째 옹기 이야기'});
     })()`);
@@ -57,11 +62,16 @@ module.exports = async ({app,panel,store,codex}) => {
     codex.request=function(method,...args){if(method==='thread/turns/list')pageRequests++;return request.call(this,method,...args);};
     try{await panel.webContents.executeJavaScript(`window.onggi.action('open-conversation',{id:${JSON.stringify(first)}})`);}finally{codex.request=request;}
     if(pageRequests!==1||synthetic.turns!==62||store.data.messages.length!==54||store.data.messages[0].text!=='첫 번째 옹기 이야기'||store.data.messages.at(-1).text!=='synthetic answer 59')throw Error('Initial history page or original metadata failed');
+    await panel.webContents.executeJavaScript(`(async()=>{const deadline=Date.now()+5000;while(document.hidden||window.__historySmokeState?.messageTotal!==54||window.__historySmokeState?.messagePatch?.ids.length!==54||!window.__historySmokeState?.remoteHistoryAvailable){if(Date.now()>deadline)throw Error('Initial page publication missing '+JSON.stringify(window.__historySmokeState));await new Promise(r=>setTimeout(r,25));}})()`);
     const initialPage={requests:pageRequests,messages:store.data.messages.length};
+    panel.messageLimit=4;panel.expandedHistory=true;publish(true);
+    await panel.webContents.executeJavaScript(`(async()=>{const deadline=Date.now()+5000;while(window.__historySmokeState?.messagePatch?.ids.length!==4){if(Date.now()>deadline)throw Error('Local page fixture not published');await new Promise(r=>setTimeout(r,25));}await window.onggi.action('load-older');while(window.__historySmokeState?.messagePatch?.ids.length!==54){if(Date.now()>deadline)throw Error('Local expansion not published');await new Promise(r=>setTimeout(r,25));}})()`);
+    if(pageRequests!==1||store.data.messages.length!==54)throw Error('Local expansion fetched a remote page');
     codex.request=function(method,...args){if(method==='thread/turns/list')pageRequests++;return request.call(this,method,...args);};
     try{
       await panel.webContents.executeJavaScript(`window.onggi.action('load-older')`);
       if(pageRequests!==2||store.data.messages.length!==104)throw Error('Second history page did not preserve local records');
+      await panel.webContents.executeJavaScript(`(async()=>{const deadline=Date.now()+5000;while(window.__historySmokeState?.messageTotal!==104||window.__historySmokeState?.messagePatch?.ids.length!==104){if(Date.now()>deadline)throw Error('Second page publication missing');await new Promise(r=>setTimeout(r,25));}})()`);
       await panel.webContents.executeJavaScript(`window.onggi.action('load-older')`);
     }finally{codex.request=request;}
     if(pageRequests!==3||store.data.messages.length!==124||new Set(store.data.messages.map(message=>message.id)).size!==124)throw Error('Incremental history pages lost or duplicated records');

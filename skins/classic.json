@@ -1,0 +1,16 @@
+{
+  "id": "classic",
+  "name": "클래식 도우미",
+  "colors": {
+    "cream": "#ffffd7",
+    "text": "#181818",
+    "muted": "#54544f",
+    "line": "#55554f",
+    "surface": "#ffffff",
+    "wash": "#e8e6dc",
+    "green": "#244c72",
+    "accentInk": "#ffffff",
+    "field": "#ffffff",
+    "danger": "#952d23"
+  }
+}

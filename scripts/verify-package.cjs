@@ -15,7 +15,7 @@ const timer=setTimeout(()=>{console.error('PACKAGE_VERIFICATION_TIMEOUT');app.ex
 app.whenReady().then(async()=>{
   const result={at:new Date().toISOString(),archive,runtime:{electron:process.versions.electron,node:process.versions.node,arch:process.arch},hashes:{}};
   const files=['src/main.cjs','src/codex.cjs','src/models.cjs','src/preload.cjs','src/packs.cjs','src/personas.cjs','src/pack-library.cjs','src/asset-validator.cjs','src/connection-setup.cjs','src/response-images.cjs','src/attachments.cjs','src/skins.cjs','src/store.cjs','src/store-worker.cjs','src/ui/renderer.bundle.js','src/ui/renderer.bundle.js.LEGAL.txt','src/ui/index.html','src/ui/style.css','src/ui/notice.js','src/ui/notice.html','src/ui/validate-images.html','THIRD_PARTY_NOTICES.txt'];
-  files.push('src/storage-maintenance.cjs');
+  files.push('src/storage-maintenance.cjs','src/bounded-file.cjs','src/history-search-worker.cjs','src/cache-quota.cjs');
   const excluded=['README.md','TASKS.md','AGENTS.md','.gitignore','src/ui/renderer.mjs','assets/tray-source.png'];
   for(const folder of ['characters','skins','assets'])for(const entry of fs.readdirSync(path.join(root,folder),{recursive:true,withFileTypes:true}))if(entry.isFile()){const file=path.relative(root,path.join(entry.parentPath,entry.name));if(!excluded.includes(file.split(path.sep).join('/')))files.push(file);}
   for(const file of files){const source=fs.readFileSync(path.join(root,file)),packaged=fs.readFileSync(path.join(archive,file));assert.ok(source.equals(packaged),file+' bytes differ');result.hashes[file]=createHash('sha256').update(source).digest('hex');}
@@ -23,9 +23,13 @@ app.whenReady().then(async()=>{
   for(const entry of fs.readdirSync(archive,{recursive:true,withFileTypes:true}))if(entry.isFile())packagedFiles.push(path.relative(archive,path.join(entry.parentPath,entry.name)).split(path.sep).join('/'));
   assert.deepEqual(new Set(packagedFiles),expected,'Unexpected or missing packaged file');
   for(const file of excluded)assert.equal(fs.existsSync(path.join(archive,file)),false,'Development file leaked into ASAR: '+file);
-  for(const file of ['src/store.cjs','src/store-worker.cjs'])assert.ok(fs.readFileSync(path.join(root,file)).equals(fs.readFileSync(path.join(archive+'.unpacked',file))),file+' unpacked bytes differ');
+  for(const file of ['src/store.cjs','src/store-worker.cjs','src/history-search-worker.cjs','src/bounded-file.cjs'])assert.ok(fs.readFileSync(path.join(root,file)).equals(fs.readFileSync(path.join(archive+'.unpacked',file))),file+' unpacked bytes differ');
   if(process.platform==='darwin')assert.ok(fs.readFileSync(path.join(root,'assets/icon.icns')).equals(fs.readFileSync(path.join(path.dirname(archive),'electron.icns'))),'bundle icon differs');
-  const metadata=require(path.join(archive,'package.json'));assert.equal(metadata.onggiProjectVersion,require(path.join(root,'package.json')).version);result.projectVersion=metadata.onggiProjectVersion;result.excluded=excluded;
+  const metadata=require(path.join(archive,'package.json'));assert.equal(metadata.onggiProjectVersion,require(path.join(root,'package.json')).version);assert.equal(metadata.onggiBuildVersion,require(path.join(root,'package.json')).onggiBuildVersion);result.projectVersion=metadata.onggiProjectVersion;result.buildVersion=metadata.onggiBuildVersion;result.excluded=excluded;
+  const {loadSkins}=require(path.join(archive,'src/skins.cjs')),{loadPack}=require(path.join(archive,'src/packs.cjs'));
+  const skins=loadSkins(path.join(archive,'skins')),packs=fs.readdirSync(path.join(archive,'characters'),{withFileTypes:true}).filter(entry=>entry.isDirectory()).map(entry=>loadPack(path.join(archive,'characters',entry.name)));
+  const skinIds=skins.map(skin=>skin.id).sort(),packIds=packs.map(pack=>pack.manifest.id).sort();
+  assert.deepEqual(skinIds,['classic','mono','night','paper']);assert.deepEqual(packIds,['onggi-clip','onggi-clip-blink','onggi-pixel-bean','onggi-sprout']);result.packagedCatalogs={skins:skinIds,packs:packIds,boundedAsarReads:true};
   const {ResponseImages}=require(path.join(archive,'src/response-images.cjs')),{AssetValidator}=require(path.join(archive,'src/asset-validator.cjs')),{Store}=require(path.join(archive,'src/store.cjs')),{AttachmentStore}=require(path.join(archive,'src/attachments.cjs'));
   const profile=fs.mkdtempSync(path.join(output,'store-')),store=new Store(profile,{demo:false,workspace:profile});
   try{
@@ -51,6 +55,12 @@ app.whenReady().then(async()=>{
     assert.ok(candidate?.eligible);const moved=await maintenance.quarantine({token:inspection.token,ids:[candidate.id]},options,()=>true);assert.equal(moved.moved.length,1);assert.equal(fs.existsSync(orphanFile),false);
     const recovered=await maintenance.restore(moved.batch,()=>true);assert.equal(recovered.restored.length,1);assert.ok(fs.readFileSync(orphanFile).equals(orphan));
     result.packagedStorage={referencedCachePreserved:true,selectedOrphanQuarantined:true,restoreBytesPreserved:true,backupPreserved:recovered.backupPreserved};
+    const {Worker}=require('node:worker_threads'),{once}=require('node:events'),search=new Worker(path.join(archive+'.unpacked','src/history-search-worker.cjs'),{workerData:{historyDirectory:store.historyDirectory}});let searchTimer;
+    try{
+      const response=once(search,'message');search.postMessage({id:store.data.activeConversationId,query:'inspect',remainingBytes:32*1024*1024});
+      const [found]=await Promise.race([response,new Promise((_,reject)=>{searchTimer=setTimeout(()=>reject(Error('Packaged history search timed out')),5000);})]);
+      assert.equal(found.scanned,true);assert.ok(found.match.includes('inspect'));assert.ok(found.bytes>0);result.packagedSearch={worker:true,boundedReader:true,scanned:found.scanned,bytes:found.bytes};
+    }finally{clearTimeout(searchTimer);await search.terminate();}
     result.packagedImage={synthetic:!imageItems,width:image.width,height:image.height,bytes:image.bytes,originalId:image.id,previewId:image.previewId,previewWidth:bytes.readUInt32BE(16),previewHeight:bytes.readUInt32BE(20),originalBytesPreserved:true,storeReloaded:true};
   }finally{await store.closeWorker();fs.rmSync(profile,{recursive:true,force:true});}
   result.passed=true;fs.writeFileSync(path.join(output,'package-verification.json'),JSON.stringify(result,null,2));console.log('PACKAGE_RUNTIME_ASSETS_WORKER_ICON_AND_IMAGES_OK',files.length,result.projectVersion);app.quit();

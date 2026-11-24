@@ -13,7 +13,7 @@
 | 구조 검토·플로팅·UI 안내 | alpha20/21을 현재 후보로 안내하던 문구, 원격 과거 조회 미완료 표시, 고정 창 크기 설명을 현재 코드와 일치시킴 |
 | 문서 링크·이력 목록 | 이동한 문서의 들어오는/나가는 상대 경로와 작업 목록 앵커 갱신. 현재 문서와 당시 계획의 판정 기준 구분 |
 
-정리 전 TASKS와 알파 보고서는 [작업 목록 사본](history/TASKS_BEFORE_CLEANUP_2026-10-16.md)·[검증 보고서 사본](history/ALPHA_REPORT_BEFORE_CLEANUP_2026-10-16.md)에 보존했다. 이동한 8개 파일은 [이력 목록](history/README.md)에서 찾을 수 있다. 실행 소스·의존성·팩·자산·앱 묶음을 삭제하거나 새 헬퍼/모듈을 추가하지 않았다.
+정리 전 TASKS와 알파 보고서는 [작업 목록 사본](TASKS_BEFORE_CLEANUP_2026-10-16.md)·[검증 보고서 사본](ALPHA_REPORT_BEFORE_CLEANUP_2026-10-16.md)에 보존했다. 이동한 8개 파일은 [이력 목록](README.md)에서 찾을 수 있다. 실행 소스·의존성·팩·자산·앱 묶음을 삭제하거나 새 헬퍼/모듈을 추가하지 않았다.
 
 ## 삭제하지 않은 내용과 근거
 
@@ -30,6 +30,6 @@
 
 이번 변경은 문서에 한정한다. 실행 입력이 동일하므로 단위 190개·Electron 15종·네이티브 입력/클립보드·패키지 검사를 다시 실행하거나 앱을 재생성하지 않았다. 해당 수치는 [이전 Mac 구현 검증](MAC_FOLLOWUP_RESULT_2026-10-15.md)의 결과다. 문서 이동에 따라 그 보고서의 상대 링크도 바뀌었으므로 당시 해시는 당시 복구 사본과 대조한다. 기존 원자료·최종 감사 JSON을 새 검증 결과로 덮어쓰지 않았다.
 
-정리 전 프로젝트 소유 파일 197개와 기존 앱 ASAR 3개의 해시를 [기준 장부](../artifacts/legacy-cleanup-2026-10-16/baseline-manifest.json)에 보존했다. 해당 폴더의 `baseline/`에서 필요한 파일을 대조·복구할 수 있다. 최신 파일을 일괄 덮어쓰지 말고 [이동 목록](../artifacts/legacy-cleanup-2026-10-16/relocations.json)에 따라 문서 위치와 링크를 함께 복원한다. 최종 검증·변경 목록은 [검증 장부](../artifacts/legacy-cleanup-2026-10-16/verification.json), 참조 분석은 [코드 참조 장부](../artifacts/legacy-cleanup-2026-10-16/code-reference-audit.json)에 기록한다.
+정리 전 프로젝트 소유 파일 197개와 기존 앱 ASAR 3개의 해시를 [기준 장부](../../artifacts/legacy-cleanup-2026-10-16/baseline-manifest.json)에 보존했다. 해당 폴더의 `baseline/`에서 필요한 파일을 대조·복구할 수 있다. 최신 파일을 일괄 덮어쓰지 말고 [이동 목록](../../artifacts/legacy-cleanup-2026-10-16/relocations.json)에 따라 문서 위치와 링크를 함께 복원한다. 최종 검증·변경 목록은 [검증 장부](../../artifacts/legacy-cleanup-2026-10-16/verification.json), 참조 분석은 [코드 참조 장부](../../artifacts/legacy-cleanup-2026-10-16/code-reference-audit.json)에 기록한다.
 
-남은 작업의 우선순위와 완료 조건은 [TASKS](../TASKS.md)를 따른다. 현재 기능의 계약과 복구 경계를 유지하며, 다음 정리는 실제 미사용·중복·측정 비용이 입증된 항목부터 진행한다.
+남은 작업의 우선순위와 완료 조건은 [TASKS](../../TASKS.md)를 따른다. 현재 기능의 계약과 복구 경계를 유지하며, 다음 정리는 실제 미사용·중복·측정 비용이 입증된 항목부터 진행한다.

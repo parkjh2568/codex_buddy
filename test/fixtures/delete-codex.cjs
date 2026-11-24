@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 const readline=require('node:readline');
-let sequence=0,threadSequence=0,modelListCount=0,timer,deltaTimer;
+let sequence=0,threadSequence=0,modelListCount=0,hold=false,activeTurn=null;
 const fs=require('node:fs');const path=require('node:path');
 const file=path.join(process.cwd(),'delete-fixture-threads.json');
 let saved={};if(fs.existsSync(file))saved=JSON.parse(fs.readFileSync(file,'utf8'));
@@ -18,6 +18,11 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
     ,...(++modelListCount>=3?[{model:'test-new',displayName:'New CLI Model',hidden:false,defaultReasoningEffort:'low',supportedReasoningEfforts:[{reasoningEffort:'low'}]}]:[])
   ],nextCursor:null}});
   if(method==='config/read')send({id,result:{config:{model:'test-main',model_reasoning_effort:'high'}}});
+  if(method==='test/hold'){hold=params.enabled===true;send({id,result:{}});}
+  if(method==='test/complete-current'){
+    if(activeTurn&&(params.threadId!==undefined&&params.threadId!==activeTurn.threadId||params.turnId!==undefined&&params.turnId!==activeTurn.turnId))send({id,error:{code:-32602,message:'Held fixture turn does not own this completion'}});
+    else{activeTurn?.finish();send({id,result:{}});}
+  }
   if(method==='thread/start'){
     const thread={id:'model-thread-'+(++threadSequence),threadSource:params.threadSource,turns:[]};threads.set(thread.id,thread);fs.writeFileSync(file,JSON.stringify({threadSequence,sequence,threads:[...threads]}));
     send({id,result:{thread,model:params.model??'test-main'}});
@@ -34,18 +39,26 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
     else {threads.delete(params.threadId);fs.writeFileSync(file,JSON.stringify({threadSequence,sequence,threads:[...threads]}));send({method:'thread/deleted',params:{threadId:params.threadId}});send({id,result:{}});}
   }
   if(method==='turn/start'){
+    if(activeTurn){send({id,error:{code:-32000,message:'A fixture turn is already active'}});return;}
     const turnId='model-turn-'+(++sequence);
     const thread=threads.get(params.threadId);
     const turn={id:turnId,status:'inProgress',startedAt:Date.now(),personaInstructions:params.collaborationMode?.settings.developer_instructions,items:[{type:'userMessage',id:params.clientUserMessageId,content:params.input}]};thread.turns.push(turn);
     send({id,result:{turn:{id:turnId}}});send({method:'turn/started',params:{threadId:params.threadId,turn:{id:turnId}}});
-    deltaTimer=setTimeout(()=>send({method:'item/agentMessage/delta',params:{threadId:params.threadId,turnId,itemId:'item-'+turnId,delta:'응답 시작'}}),120);
-    timer=setTimeout(()=>{
+    const operation={threadId:params.threadId,turnId,timer:null,deltaTimer:null,finish:null};activeTurn=operation;
+    operation.deltaTimer=setTimeout(()=>send({method:'item/agentMessage/delta',params:{threadId:params.threadId,turnId,itemId:'item-'+turnId,delta:'응답 시작'}}),120);
+    operation.finish=()=>{
+      if(turn.status!=='inProgress'||activeTurn!==operation)return;
+      clearTimeout(operation.timer);clearTimeout(operation.deltaTimer);activeTurn=null;
       const text=`## Model snapshot\n\n${params.model} / ${params.effort}\n\nService tier: ${params.serviceTierForTurn}\n\n${params.input[0].text}`;
       const item={type:'agentMessage',id:'item-'+turnId,text};turn.items.push(item);turn.status='completed';
       send({method:'item/completed',params:{threadId:params.threadId,turnId,item}});
       fs.writeFileSync(file,JSON.stringify({threadSequence,sequence,threads:[...threads]}));
       send({method:'turn/completed',params:{threadId:params.threadId,turn:{id:turnId,status:'completed'}}});
-    },900);
+    };if(!hold)operation.timer=setTimeout(operation.finish,900);
   }
-  if(method==='turn/interrupt'){clearTimeout(timer);clearTimeout(deltaTimer);const turn=threads.get(params.threadId)?.turns.find(t=>t.id===params.turnId);if(turn)turn.status='interrupted';send({id,result:{}});send({method:'turn/completed',params:{threadId:params.threadId,turn:{id:params.turnId,status:'interrupted'}}});}
+  if(method==='turn/interrupt'){
+    const turn=threads.get(params.threadId)?.turns.find(t=>t.id===params.turnId);
+    if(turn?.status==='inProgress'&&activeTurn?.threadId===params.threadId&&activeTurn.turnId===params.turnId){clearTimeout(activeTurn.timer);clearTimeout(activeTurn.deltaTimer);activeTurn=null;turn.status='interrupted';fs.writeFileSync(file,JSON.stringify({threadSequence,sequence,threads:[...threads]}));send({id,result:{}});send({method:'turn/completed',params:{threadId:params.threadId,turn:{id:params.turnId,status:'interrupted'}}});}
+    else send({id,result:{}});
+  }
 });

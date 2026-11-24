@@ -10,13 +10,13 @@ state·저장 저널·삭제 저널과 복구 대상에 크기 검사 후 제한
 
 `src/store.cjs`의 여섯 경로를 최초 FD 크기+1바이트까지만 읽도록 바꿨다. 부분 읽기·UTF-8 오류·읽는 중 inode/size/time·이름/정규 경로 변경을 검사하고 모든 종료에서 descriptor를 닫는다. state 8MiB, history 32MiB, 저장 저널 1KiB, 삭제 저널 64KiB 제한을 유지한다. 저널 SHA-256은 decode 후 문자열 대신 원본 바이트와 대조한다. 단순 로직을 별도 헬퍼로 분리하지 않았다.
 
-성장 재현의 실제 읽기량은 state 9,437,281→98바이트, 저장 저널 2,097,376→225바이트, 삭제 저널 2,097,324→173바이트였다. 이전 수치는 readFileSync 반환값의 UTF-8 바이트이며 이후 수치는 제한 FD 읽기의 누적 바이트로 관찰 층이 다르다. 일반 state 손상은 기존 정책대로 경고·고유 백업 후 진행하고, 불확실한 저널 복구는 쓰기를 차단한다. JSON parse와 백업 복사 비용은 남는다. [재현·회귀 근거](../artifacts/mac-followup-2026-10-15/store-audit/implementation-summary.json).
+성장 재현의 실제 읽기량은 state 9,437,281→98바이트, 저장 저널 2,097,376→225바이트, 삭제 저널 2,097,324→173바이트였다. 이전 수치는 readFileSync 반환값의 UTF-8 바이트이며 이후 수치는 제한 FD 읽기의 누적 바이트로 관찰 층이 다르다. 일반 state 손상은 기존 정책대로 경고·고유 백업 후 진행하고, 불확실한 저널 복구는 쓰기를 차단한다. JSON parse와 백업 복사 비용은 남는다. [재현·회귀 근거](../../artifacts/mac-followup-2026-10-15/store-audit/implementation-summary.json).
 
 ### 늦게 도착하는 첨부 결과
 
 파일 선택기·클립보드·파일 읽기 또는 저장 대기 동안 화면이 바뀌면 이전 화면의 첨부 결과가 현재 pending 목록에 들어갈 수 있었다. main의 요청 시작 시 창·렌더 세대를 캡처하고 비동기 작업 완료 시 등록 전에 현재 프레임·창·대화·작업 폴더·편집 작업·잠금/절전 상태를 다시 확인한다. 오래된 결과는 등록하지 않으며 공유 해시의 캐시를 임의로 지우지 않는다.
 
-8개 대기 경계마다 정상 1조건·수명 변경 5조건을 확인했다. 총 48조건에서 정상 8건 수락·오래된 결과 40건 거절과 기존 pending 객체 보존을 확인했다. 별도 VM 반복은 제거/잠금 1,000회이며 OS 포인터 반복 횟수로 해석하지 않는다. [독립 검토](../artifacts/mac-followup-2026-10-15/review/independent-review.json).
+8개 대기 경계마다 정상 1조건·수명 변경 5조건을 확인했다. 총 48조건에서 정상 8건 수락·오래된 결과 40건 거절과 기존 pending 객체 보존을 확인했다. 별도 VM 반복은 제거/잠금 1,000회이며 OS 포인터 반복 횟수로 해석하지 않는다. [독립 검토](../../artifacts/mac-followup-2026-10-15/review/independent-review.json).
 
 ### 원격 과거 기록의 단계 조회
 
@@ -24,7 +24,7 @@ state·저장 저널·삭제 저널과 복구 대상에 크기 검사 후 제한
 
 설치 CLI `0.162.0-alpha.17.2`의 로컬 생성 스키마와 [공식 App Server 문서](https://learn.chatgpt.com/docs/app-server)의 DESC/full·opaque cursor 계약을 대조했다. turn/item ID로 연결되지 않는 레거시 텍스트 매칭이나 시간/연결 위치를 확인할 수 없는 페이지는 원본을 보존하고 거절한다. 취소는 진행 중 RPC의 물리 중단이 아니며, 연결·이미지·워커 저장까지 전체 15초를 보장하지 않는다.
 
-실제 Electron에서 원격 62턴 fixture의 초기 요청 1회·메시지 54개(기존 2턴+원격 25턴), 두 번 추가 조회 뒤 124개 메시지와 ID·순서·로컬 메타데이터 보존을 확인했다. [실행 결과](../artifacts/mac-followup-2026-10-15/integration/history/history-ui-smoke.json).
+실제 Electron에서 원격 62턴 fixture의 초기 요청 1회·메시지 54개(기존 2턴+원격 25턴), 두 번 추가 조회 뒤 124개 메시지와 ID·순서·로컬 메타데이터 보존을 확인했다. [실행 결과](../../artifacts/mac-followup-2026-10-15/integration/history/history-ui-smoke.json).
 
 ## 성능 측정
 
@@ -42,7 +42,7 @@ state·저장 저널·삭제 저널과 복구 대상에 크기 검사 후 제한
 
 정상 처리의 일관된 속도 개선은 확인되지 않았다. 이번 변경은 읽기 상한과 손상/경합 검증의 보강이다. 30MiB 현재 코드의 동기 저장은 메인 CPU 중앙값 56.24ms, 각 실행에서 관찰한 최대 타이머 간격의 p95 67.49ms였다. 워커 저장의 같은 타이머 지표는 6.55ms였지만 전체 처리 중앙값은 74.86ms로 더 길다. 워커의 메인 CPU는 8.56ms였고 동기 postMessage 호출 구간은 3.28ms였다. 메인에서 전체 스냅샷을 전달하는 비용은 남는다. 이 지표는 워커 수신 측 deserialize까지 전체 복사 비용을 뜻하지 않는다.
 
-활성 초기 로드의 heap 전후 증가는 약 60.38MiB였지만 최대 사용량·전체 할당량·누수 측정은 아니다. 검색은 파일별로 이벤트 루프에 제어를 돌려주지만 파일 하나의 전체 read/parse는 동기다. DB와 SQL을 사용하지 않으므로 N+1 SQL은 없고, 대응되는 비용은 대화 파일별 전체 읽기와 첨부별 quota 재조사다. [전체 측정](../artifacts/mac-followup-2026-10-15/store-benchmark/summary.json) · [해석](../artifacts/mac-followup-2026-10-15/store-benchmark/interpretation.json).
+활성 초기 로드의 heap 전후 증가는 약 60.38MiB였지만 최대 사용량·전체 할당량·누수 측정은 아니다. 검색은 파일별로 이벤트 루프에 제어를 돌려주지만 파일 하나의 전체 read/parse는 동기다. DB와 SQL을 사용하지 않으므로 N+1 SQL은 없고, 대응되는 비용은 대화 파일별 전체 읽기와 첨부별 quota 재조사다. [전체 측정](../../artifacts/mac-followup-2026-10-15/store-benchmark/summary.json) · [해석](../../artifacts/mac-followup-2026-10-15/store-benchmark/interpretation.json).
 
 ### 원격 요청과 페이지별 저장 비용
 
@@ -58,13 +58,13 @@ state·저장 저널·삭제 저널과 복구 대상에 크기 검사 후 제한
 | 확정 history 파일 크기 누적 | 1,310,475바이트 | 26,901,180바이트 |
 | 전부 확장 시간 | 43.68ms | 231.38ms |
 
-초기 수신량 감소와 함께 전부 확장의 논리 history 쓰기량 20.53배·시간 5.30배 증가도 확인했다. 작은 62턴의 초기 시간은 28.59→27.96ms로 차이가 미미했다. 매 페이지를 복구 가능한 저장으로 확정하는 선택의 비용이다. 누적 파일 크기는 SSD 물리 쓰기량이 아니며, `storeSerializedHistoryBytes`는 저장 후 snapshot 크기 합산 proxy이므로 실제 직렬화 수행 바이트로 사용하지 않았다. [원자료](../artifacts/mac-followup-2026-10-15/remote-benchmark/paging-benchmark.json) · [방법론 독립 검토](../artifacts/mac-followup-2026-10-15/review/benchmark-methodology-review.json).
+초기 수신량 감소와 함께 전부 확장의 논리 history 쓰기량 20.53배·시간 5.30배 증가도 확인했다. 작은 62턴의 초기 시간은 28.59→27.96ms로 차이가 미미했다. 매 페이지를 복구 가능한 저장으로 확정하는 선택의 비용이다. 누적 파일 크기는 SSD 물리 쓰기량이 아니며, `storeSerializedHistoryBytes`는 저장 후 snapshot 크기 합산 proxy이므로 실제 직렬화 수행 바이트로 사용하지 않았다. [원자료](../../artifacts/mac-followup-2026-10-15/remote-benchmark/paging-benchmark.json) · [방법론 독립 검토](../../artifacts/mac-followup-2026-10-15/review/benchmark-methodology-review.json).
 
 ### 이미지 내보내기
 
 실제 Electron의 1024px 합성 PNG(3,156,550바이트)를 32개 사본으로 내보내는 검사를 전후 각각 3회 수행했다. 현재 시간은 128.75/106.99/101.61ms, 이전은 139.54/121.79/110.33ms였다. 내보내기 구현은 동일하므로 이 작은 표본 차이를 개선률로 제시하지 않는다. 32개 모두 보존됐고 첫 파일 쓰기 전에 읽은 이미지는 항상 1개로 순차 처리 계약을 유지했다.
 
-현재 읽기 관찰 지점의 RSS 증가 최대치는 표본별 약 51.94/24.58/60.64MiB였다. 이는 그 관찰 지점의 최대값이며 OS 최대 메모리·전체 할당량·누수가 아니다. [전후 내보내기 표본](../artifacts/mac-followup-2026-10-15/image-export-summary.json). 이미지 decode/중복 캐시와 첨부 quota는 아래에서 별도로 측정했다.
+현재 읽기 관찰 지점의 RSS 증가 최대치는 표본별 약 51.94/24.58/60.64MiB였다. 이는 그 관찰 지점의 최대값이며 OS 최대 메모리·전체 할당량·누수가 아니다. [전후 내보내기 표본](../../artifacts/mac-followup-2026-10-15/image-export-summary.json). 이미지 decode/중복 캐시와 첨부 quota는 아래에서 별도로 측정했다.
 
 ### 첨부 quota·해시·중복 비용
 
@@ -76,7 +76,7 @@ state·저장 저널·삭제 저널과 복구 대상에 크기 검사 후 제한
 | 캐시 2,048개 | 107.34ms | 101.97ms | 1.22ms |
 | 캐시 10,000개 | 487.83ms | 478.74ms | 1.18ms |
 
-10,000개 중복 가져오기는 캐시 조사 8회·일반 파일 lstat 80,072회·SHA 16회를 수행하며 새 파일 쓰기는 0회였다. 해당 조건에서 실행별 최대 타이머 간격의 p95는 신규 17.02ms·중복 10.63ms·읽기 2.66ms였다. 최초 quick 검사의 수식 오류는 Node 임시파일 정리에서 발생한 추가 lstat 8회를 일반 캐시 조사와 섞어 센 문제였다. 실패 로그를 보존하고 카운터를 분리해 재검했다. [전체 측정](../artifacts/mac-followup-2026-10-15/attachment-benchmark/summary.json) · [독립 검산](../artifacts/mac-followup-2026-10-15/review/attachment-raw-image-static-review.json).
+10,000개 중복 가져오기는 캐시 조사 8회·일반 파일 lstat 80,072회·SHA 16회를 수행하며 새 파일 쓰기는 0회였다. 해당 조건에서 실행별 최대 타이머 간격의 p95는 신규 17.02ms·중복 10.63ms·읽기 2.66ms였다. 최초 quick 검사의 수식 오류는 Node 임시파일 정리에서 발생한 추가 lstat 8회를 일반 캐시 조사와 섞어 센 문제였다. 실패 로그를 보존하고 카운터를 분리해 재검했다. [전체 측정](../../artifacts/mac-followup-2026-10-15/attachment-benchmark/summary.json) · [독립 검산](../../artifacts/mac-followup-2026-10-15/review/attachment-raw-image-static-review.json).
 
 단순히 한 번 조사한 quota를 배치 전체에서 재사용하면 기존 파일의 내용이 커져도 디렉터리 mtime이 그대로인 경우를 놓칠 수 있다. 현재의 보수적 검증을 약화하는 캐시는 추가하지 않았다. 이미지 decode 결과를 캐시하더라도 원본/preview 해시·폴더 전체 형식/링크 검증과 손상 정책을 유지해야 한다. 이 경계 변경은 후속 설계 대상으로 남긴다.
 
@@ -91,7 +91,7 @@ state·저장 저널·삭제 저널과 복구 대상에 크기 검사 후 제한
 
 중복 파일 쓰기는 0회지만 매번 validator가 실행됐다. 디스크 중복 제거는 decode 캐시를 뜻하지 않는다. 파이프라인 시간은 숨긴 창의 시작/로드·Chromium decode·512px canvas·IPC를 포함하므로 순수 codec 시간으로 단정하지 않는다. CPU 값은 메인 Electron 프로세스만 포함하며 검증 렌더러 전체 CPU가 아니다. 타이머는 반환 직후 마지막 동기 구간을 놓칠 수 있는 관찰 지표다. 최초 측정도 OS/GPU cold 상태를 보장하지 않는다.
 
-최초 계측은 macOS `/var`→`/private/var` 정규 경로 차이로 파일 필터가 맞지 않아 write 수가 0으로 나왔다. 실패 스크립트/로그를 보존하고 실제 `images.root`·fs 모듈 동일성을 확인한 뒤 계측을 수정했다. 파일 2회/0회 쓰기 assertion은 유지했다. [전체 결과](../artifacts/mac-followup-2026-10-15/image-benchmark/image-cost-benchmark.json) · [독립 검산](../artifacts/mac-followup-2026-10-15/review/image-raw-review.json).
+최초 계측은 macOS `/var`→`/private/var` 정규 경로 차이로 파일 필터가 맞지 않아 write 수가 0으로 나왔다. 실패 스크립트/로그를 보존하고 실제 `images.root`·fs 모듈 동일성을 확인한 뒤 계측을 수정했다. 파일 2회/0회 쓰기 assertion은 유지했다. [전체 결과](../../artifacts/mac-followup-2026-10-15/image-benchmark/image-cost-benchmark.json) · [독립 검산](../../artifacts/mac-followup-2026-10-15/review/image-raw-review.json).
 
 ## 자동 검증 범위
 
@@ -108,9 +108,9 @@ state·저장 저널·삭제 저널과 복구 대상에 크기 검사 후 제한
 | 9. 연결 장애 | 폴더 없음/일반 파일/EACCES 주입·CLI 없음/발견 후 사라짐·인증 필요/조회 실패·모델/config 실패 13조건 통과. 실제 child spawn 실패 3종 포함 |
 | 10. 자원 | 검증된 ASAR 5개 상태×60초·50표본, AC 출처·유휴/전환 이벤트 관찰 완료. 실제 배터리 전환·잠금/절전 후 복귀·한국어 IME는 후속 |
 
-네이티브 선택기/포인터 기록은 [native-review-result.json](../artifacts/mac-followup-2026-10-15/native-review-result.json), 연결 실패 조건은 [connection-failure-probe.json](../artifacts/mac-followup-2026-10-15/review/connection-failure-probe.json)에 있다. 최초 CUA는 별도 기본 Electron 창을 선택했으므로 그 시도는 성공으로 세지 않았다. 올바른 검증 프로세스 선택 뒤 실제 입력과 창 크기 변경을 확인하고 앱을 정상 종료했다.
+네이티브 선택기/포인터 기록은 [native-review-result.json](../../artifacts/mac-followup-2026-10-15/native-review-result.json), 연결 실패 조건은 [connection-failure-probe.json](../../artifacts/mac-followup-2026-10-15/review/connection-failure-probe.json)에 있다. 최초 CUA는 별도 기본 Electron 창을 선택했으므로 그 시도는 성공으로 세지 않았다. 올바른 검증 프로세스 선택 뒤 실제 입력과 창 크기 변경을 확인하고 앱을 정상 종료했다.
 
-클립보드 검사는 자동 승인 검토가 임의 내용 접근/복원 위험으로 거절한 뒤 사용자에게 구체적 승인을 받았다. 승인 후 실제 텍스트·이미지 픽셀 일치·버튼 첨부·빈 클립보드 오류를 확인했고 원래 내용을 OS에 다시 쓰는 호출이 완료됐다. 복원한 원본 payload의 재읽기/바이트 대조까지 수행한 것은 아니다. 성공한 이미지 붙여넣기가 메뉴를 닫는 데도 빈 클립보드 검사에서 숨겨진 버튼을 누르던 테스트 스크립트를 수정했다. [수정 재실행](../artifacts/mac-followup-2026-10-15/native-clipboard-fixed/integration.json)과 [독립 검토](../artifacts/mac-followup-2026-10-15/review/native-clipboard-fixture-review.json)에 성공·복원 호출·프로필 정리를 기록했다.
+클립보드 검사는 자동 승인 검토가 임의 내용 접근/복원 위험으로 거절한 뒤 사용자에게 구체적 승인을 받았다. 승인 후 실제 텍스트·이미지 픽셀 일치·버튼 첨부·빈 클립보드 오류를 확인했고 원래 내용을 OS에 다시 쓰는 호출이 완료됐다. 복원한 원본 payload의 재읽기/바이트 대조까지 수행한 것은 아니다. 성공한 이미지 붙여넣기가 메뉴를 닫는 데도 빈 클립보드 검사에서 숨겨진 버튼을 누르던 테스트 스크립트를 수정했다. [수정 재실행](../../artifacts/mac-followup-2026-10-15/native-clipboard-fixed/integration.json)과 [독립 검토](../../artifacts/mac-followup-2026-10-15/review/native-clipboard-fixture-review.json)에 성공·복원 호출·프로필 정리를 기록했다.
 
 ## 패키지 자원 관찰
 
@@ -126,11 +126,11 @@ state·저장 저널·삭제 저널과 복구 대상에 크기 검사 후 제한
 
 50표본 모두 `onBattery:false`였고 전후 `pmset`도 AC 연결·81%·충전 안 함 상태였다. 잠금/절전/전원 전환 이벤트는 없었다. 표시/숨김·움직임 줄이기 상태도 표본과 일치했다. 이는 5분 유휴 관찰이며 장시간 실사용·배터리 방전·실제 CLI 자식·전체 시스템 메모리·버전 간 개선률을 검증한 결과가 아니다. 공유 메모리 합을 고유 RAM으로 해석하지 않는다.
 
-종료 시 Electron의 macOS `task_policy_set` 커널 경고 2건이 남았고 프로세스는 exit 0으로 정상 종료했다. 이 메시지의 원인이나 OS 자원 제어 전반을 해결했다고 판단하지 않았다. [원자료](../artifacts/mac-followup-2026-10-15/resources/resource-smoke.json) · [로그](../artifacts/mac-followup-2026-10-15/resources.log).
+종료 시 Electron의 macOS `task_policy_set` 커널 경고 2건이 남았고 프로세스는 exit 0으로 정상 종료했다. 이 메시지의 원인이나 OS 자원 제어 전반을 해결했다고 판단하지 않았다. [원자료](../../artifacts/mac-followup-2026-10-15/resources/resource-smoke.json) · [로그](../../artifacts/mac-followup-2026-10-15/resources.log).
 
 ## 검사와 전달
 
-최신 소스의 단위 190개·lint·구문/기본 팩 검사가 통과했다. 실제 격리 Electron 통합은 15종 모두 성공했고 각 프로필은 드라이버 정책에 따라 정리했다. 실모델 호출은 0회다. 추가 화면 정렬·전후 이미지/첨부 계측을 마쳤다. staging alpha22/build38의 패키지 85개 파일·unpacked Store/worker·아이콘·이미지/첨부·보관/복원과 strict ad-hoc 서명 검증도 통과했다. 실제 alpha22 패키지의 별도 체험 프로필 실행에서 native show 이벤트와 정상 종료도 확인했다. 5개 표시 상태의 자원 표본 50개도 수집 완료했다. 최종 입력·보존·패키지 대조는 [final-audit.json](../artifacts/mac-followup-2026-10-15/final-audit.json)에 기록한다.
+최신 소스의 단위 190개·lint·구문/기본 팩 검사가 통과했다. 실제 격리 Electron 통합은 15종 모두 성공했고 각 프로필은 드라이버 정책에 따라 정리했다. 실모델 호출은 0회다. 추가 화면 정렬·전후 이미지/첨부 계측을 마쳤다. staging alpha22/build38의 패키지 85개 파일·unpacked Store/worker·아이콘·이미지/첨부·보관/복원과 strict ad-hoc 서명 검증도 통과했다. 실제 alpha22 패키지의 별도 체험 프로필 실행에서 native show 이벤트와 정상 종료도 확인했다. 5개 표시 상태의 자원 표본 50개도 수집 완료했다. 최종 입력·보존·패키지 대조는 [final-audit.json](../../artifacts/mac-followup-2026-10-15/final-audit.json)에 기록한다.
 
 기준 194개 파일의 경로·SHA와 작업 전 git 상태를 `artifacts/mac-followup-2026-10-15/baseline.json` 및 `baseline/`에 보존했다. 기존 staging build37 전체 앱은 `baseline-app37.app`에 보존했다. 일반 alpha14/build30·rollback alpha17/build33·개인 대화·인증 설정·원본 에셋과 의존성은 이번 작업에서 제거하지 않았다. 기존 앱 ASAR 3개·기준 소스 194개·에셋 63개 해시와 의존성 불변 여부를 최종 대조했다.
 

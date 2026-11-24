@@ -4,8 +4,8 @@ module.exports=async({app,panel,store,codex,modelCatalog})=>{
   panel.webContents.on('console-message',details=>{if(details.level==='error')console.error('MODEL_RENDERER_ERROR',details.message);});
   try{
     const artifactRoot=path.resolve(process.env.ONGGI_SMOKE_ROOT??path.join(__dirname,'..','artifacts'));fs.mkdirSync(artifactRoot,{recursive:true});
+    await panel.webContents.executeJavaScript(`window.onggi.action('refresh-models')`);await codex.request('test/hold',{enabled:true});
     const result=await panel.webContents.executeJavaScript(`(async()=>{
-      await window.onggi.action('refresh-models');
       await window.onggi.action('model-settings',{model:'test-main',effort:'low'});
       const readyDeadline=Date.now()+5000;
       while(Date.now()<readyDeadline&&(!document.querySelector('#model-select option[value="test-small"]')||!document.querySelector('#model-info').textContent.includes('Test Main / low')))await new Promise(r=>setTimeout(r,40));
@@ -40,10 +40,16 @@ module.exports=async({app,panel,store,codex,modelCatalog})=>{
 
       let invalidRejected=false;
       try{await window.onggi.action('model-settings',{model:'test-small',effort:'ultra'});}catch(e){invalidRejected=e.message.includes('지원하지');}
-      const completeDeadline=Date.now()+15000;
-      while(Date.now()<completeDeadline&&!document.querySelector('.message.user[data-id="'+sixth.id+'"][data-status="completed"]'))await new Promise(r=>setTimeout(r,50));
       return{ids:[first.id,second.id,third.id,fourth.id,fifth.id,sixth.id],efforts,invalidRejected,unsupportedSpeedRejected,insideComposer,modelInfo:document.querySelector('#model-info').textContent};
     })()`);
+    for(const id of result.ids){
+      const reply=store.data.messages[store.data.messages.findIndex(message=>message.id===id)+1];let deadline=Date.now()+10000;
+      while(Date.now()<deadline&&!reply.turnId)await new Promise(resolve=>setTimeout(resolve,20));if(!reply.turnId)throw Error('Queued model fixture turn did not start');
+      await codex.request('test/complete-current',{});deadline=Date.now()+10000;
+      while(Date.now()<deadline&&(reply.status!=='completed'||store.saving))await new Promise(resolve=>setTimeout(resolve,20));if(reply.status!=='completed'||store.saving)throw Error('Queued model fixture turn did not finish');
+    }
+    await codex.request('test/hold',{enabled:false});
+    const rendered=await panel.webContents.executeJavaScript(`(async()=>{const selector='.message.user[data-id="'+${JSON.stringify(result.ids.at(-1))}+'"][data-status="completed"]',deadline=Date.now()+5000;while(Date.now()<deadline&&!document.querySelector(selector))await new Promise(resolve=>setTimeout(resolve,20));return Boolean(document.querySelector(selector));})()`);if(!rendered)throw Error('Completed model fixture turn did not render');result.fixtureCompletion='explicit-owned-turn';
     const expected=[['test-main','low','default'],['test-main','low','priority'],['test-small','medium','default'],['test-main','high','default'],['test-main','high','priority'],['test-main','high','default']];
     for(let i=0;i<result.ids.length;i++){
       const index=store.data.messages.findIndex(m=>m.id===result.ids[i]);

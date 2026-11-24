@@ -6,7 +6,10 @@ window.onggi.onState(state=>{
   if(currentRevision!==state.noticeHitRevision){currentRevision=state.noticeHitRevision;lastHit='';pendingHit='';registration++;}
   const revision=currentRevision;
   const skin=skins.find(s=>s.id===state.settings.skinId);
-  if(skin)for(const [key,color]of Object.entries(skin.colors))document.body.style.setProperty('--'+key,color);
+  if(skin&&(state.skins||document.body.dataset.skin!==skin.id)){
+    for(const [key,color]of Object.entries(skin.colors))document.body.style.setProperty('--'+key,color);
+    document.body.dataset.skin=skin.id;
+  }
   document.title=state.settings.buddyName+' 안내';bubble.setAttribute('aria-label',state.settings.buddyName+'과 대화');
   bubble.firstChild.textContent=(state.activityLabel??(state.unreadReply?'새 답변이 도착했어요':labels[state.characterState])??labels.idle)+' ';bubble.hidden=!state.bubbleVisible;
   document.body.classList.toggle('notice-below',state.noticeBelow);

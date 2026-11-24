@@ -1,13 +1,14 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { createHash } = require('node:crypto');
+const {readBoundedFile}=require('./bounded-file.cjs');
 
 const STATES = ['idle', 'listening', 'thinking', 'replying', 'attention', 'error', 'sleeping'];
 
 function loadPack(directory) {
   const root = fs.realpathSync(directory), manifestPath = path.join(root, 'manifest.json');
   if (fs.lstatSync(manifestPath).isSymbolicLink() || !fs.statSync(manifestPath).isFile() || fs.statSync(manifestPath).size > 65536) throw new Error('캐릭터 설명 파일의 경로·크기를 확인해주세요.');
-  const manifestBytes=fs.readFileSync(manifestPath);if(manifestBytes.length>65536)throw Error('캐릭터 설명 파일 크기를 확인해주세요.');
+  const manifestBytes=readBoundedFile(manifestPath,65536);
   const manifest = JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(manifestBytes));
   if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest) || ![1,2].includes(manifest.schemaVersion) || typeof manifest.id !== 'string' || !/^[a-z][a-z0-9-]{0,47}$/.test(manifest.id)) throw new Error('지원하지 않는 캐릭터 팩 형식입니다.');
   if (typeof manifest.name !== 'string' || !manifest.name.trim() || Array.from(manifest.name.trim().normalize('NFC')).length > 60) throw new Error('캐릭터 이름을 확인해주세요.');
@@ -37,7 +38,7 @@ function loadPack(directory) {
       if (!entry || typeof entry.id !== 'string' || !/^[a-z][a-z0-9-]{0,47}$/.test(entry.id) || seen.has(entry.id) || typeof entry.name !== 'string' || !entry.name.trim() || Array.from(entry.name.trim().normalize('NFC')).length > 60 || /[\u0000-\u001f\u007f-\u009f]/u.test(entry.name) || typeof entry.file !== 'string' || path.isAbsolute(entry.file) || path.extname(entry.file) !== '.md') throw Error('페르소나 파일 구성이 올바르지 않습니다.');
       const file = fs.realpathSync(path.resolve(root, entry.file));
       if (!file.startsWith(root + path.sep) || !fs.statSync(file).isFile() || fs.statSync(file).size > 16384) throw Error('페르소나는 팩 내부의 16KiB 이하 MD 파일이어야 합니다.');
-      const relative = path.relative(root,file).split(path.sep).join('/'), bytes = fs.readFileSync(file), text = new TextDecoder('utf-8',{fatal:true}).decode(bytes);
+      const relative = path.relative(root,file).split(path.sep).join('/'), bytes = readBoundedFile(file,16384), text = new TextDecoder('utf-8',{fatal:true}).decode(bytes);
       if(bytes.length>16384)throw Error('페르소나는 16KiB 이하 MD 파일이어야 합니다.');
       if (!text.trim() || text.includes('\u0000')) throw Error('페르소나 내용을 확인해주세요.');
       personas.push({id:entry.id,name:entry.name.trim().normalize('NFC'),description:String(entry.description ?? '').slice(0,160),text,file:relative});
@@ -53,7 +54,7 @@ function loadPack(directory) {
     const normalized = path.relative(root,file).split(path.sep).join('/'), extension = path.extname(file).toLowerCase(), mime = {'.svg':'image/svg+xml','.png':'image/png','.webp':'image/webp'}[extension];
     if (!mime || !fs.statSync(file).isFile() || fs.statSync(file).size > 3 * 1024 * 1024) throw new Error('이미지는 SVG, PNG, WebP로 최대 3MB까지 지원합니다.');
     if (!canonical.has(file)) {
-      const content = fs.readFileSync(file);
+      const content = readBoundedFile(file,3*1024*1024);
       if(content.length>3*1024*1024)throw Error('이미지는 최대 3MB까지 지원합니다.');
       let width = null, height = null, frameCount = 1;
       if (extension === '.svg') {

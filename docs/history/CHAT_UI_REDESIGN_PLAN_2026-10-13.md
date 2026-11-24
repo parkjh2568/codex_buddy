@@ -2,7 +2,7 @@
 
 2026-10-13. 대상은 `my_budy`의 옹기봇(OnggiBot), 현재 소스 alpha20 / staging build36이다. 이 문서는 실제 코드 검토에 따른 **설계·작업계획**이다. 아래 UI 변경, 30초 숨김, 모서리 드래그를 구현하거나 실기 검증한 결과가 아니다.
 
-기존 [최종 후속 결과](FINAL_IMPLEMENTATION_RESULT_2026-10-13.md), [구조](../ARCHITECTURE.md), [현재 대화 UI](../UI_UX_REFINEMENT.md), [첨부·FIFO 계약](../ATTACHMENTS_AND_QUEUE_2026-10-10.md)을 기준으로 한다. 단순 이벤트·표시 계산은 기존 함수 안에서 처리하고, 새 UI 프레임워크·일반 상태 관리 계층·별도 초안 저장소를 추가하지 않는다.
+기존 [최종 후속 결과](FINAL_IMPLEMENTATION_RESULT_2026-10-13.md), [구조](../ARCHITECTURE.md), [현재 대화 UI](../UI_UX_REFINEMENT.md), [첨부·FIFO 계약](ATTACHMENTS_AND_QUEUE_2026-10-10.md)을 기준으로 한다. 단순 이벤트·표시 계산은 기존 함수 안에서 처리하고, 새 UI 프레임워크·일반 상태 관리 계층·별도 초안 저장소를 추가하지 않는다.
 
 ## 요청과 설계 범위
 
